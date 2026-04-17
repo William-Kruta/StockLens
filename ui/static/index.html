@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>secrs Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/single" data-route="single">
+        <span>secrs</span>
+      </a>
+
+      <div class="search-wrap" id="search-wrap">
+        <input
+          class="search-input"
+          id="search-input"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Search ticker…"
+          aria-label="Search tickers"
+          aria-autocomplete="list"
+          aria-controls="search-dropdown"
+        />
+        <ul class="search-dropdown" id="search-dropdown" role="listbox"></ul>
+      </div>
+
+      <nav class="nav">
+        <a href="/single" data-route="single">Single</a>
+        <a href="/multi" data-route="multi">Multi</a>
+        <a href="/watchlist" data-route="watchlist">Watchlist</a>
+        <a href="/screener" data-route="screener">Screener</a>
+        <a href="/dcf" data-route="dcf">DCF</a>
+      </nav>
+      <button class="llm-btn" id="llm-btn" type="button">✦ Ask LLM</button>
+    </header>
+
+    <main>
+
+      <!-- Ticker landing page -->
+      <section class="page" id="ticker-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow" id="ticker-eyebrow">Ticker</p>
+            <h1 id="ticker-heading">—</h1>
+          </div>
+          <div class="ticker-header-actions">
+            <button class="secondary" id="btn-ticker-single" type="button">Open in Single ↗</button>
+          </div>
+        </div>
+
+        <!-- Top-level tabs -->
+        <div class="ticker-main-tabs">
+          <button class="ticker-main-tab active" data-main-tab="chart">Chart</button>
+          <button class="ticker-main-tab" data-main-tab="financials">Financials</button>
+          <button class="ticker-main-tab" data-main-tab="info">Info</button>
+        </div>
+
+        <!-- Chart view -->
+        <div class="ticker-view active" id="ticker-chart-view">
+          <div class="chart-controls">
+            <div class="chart-range-bar">
+              <button class="chart-range active" data-period="1mo" data-interval="1d">1M</button>
+              <button class="chart-range" data-period="3mo" data-interval="1d">3M</button>
+              <button class="chart-range" data-period="6mo" data-interval="1d">6M</button>
+              <button class="chart-range" data-period="1y"  data-interval="1d">1Y</button>
+              <button class="chart-range" data-period="5y"  data-interval="1wk">5Y</button>
+              <button class="chart-range" data-period="max" data-interval="1wk">MAX</button>
+            </div>
+            <div class="indicator-bar">
+              <div class="ind-group">
+                <span class="ind-group-label">Overlays</span>
+                <button class="ind-chip" data-indicator="sma_20"  data-color="#4FC3F7">SMA 20</button>
+                <button class="ind-chip" data-indicator="sma_50"  data-color="#FFB800">SMA 50</button>
+                <button class="ind-chip" data-indicator="sma_200" data-color="#FF4B4B">SMA 200</button>
+                <button class="ind-chip" data-indicator="ema_12"  data-color="#00E5A0">EMA 12</button>
+                <button class="ind-chip" data-indicator="ema_26"  data-color="#FF8A65">EMA 26</button>
+                <button class="ind-chip" data-indicator="bb"      data-color="#B388FF">BB</button>
+              </div>
+              <div class="ind-group">
+                <span class="ind-group-label">Panels</span>
+                <button class="ind-chip" data-indicator="macd" data-color="#4FC3F7">MACD</button>
+                <button class="ind-chip" data-indicator="rsi"  data-color="#C8FF00">RSI</button>
+                <button class="ind-chip" data-indicator="atr"  data-color="#FFB800">ATR</button>
+              </div>
+            </div>
+          </div>
+          <div class="chart-wrap" id="ticker-chart-wrap">
+            <div class="chart-empty">Select a ticker to view its chart.</div>
+          </div>
+        </div>
+
+        <!-- Financials view -->
+        <div class="ticker-view" id="ticker-financials-view">
+          <div class="ticker-financials-bar">
+            <label>
+              Statement
+              <select id="ticker-statement">
+                <option value="income_statement">Income Statement</option>
+                <option value="balance_sheet">Balance Sheet</option>
+                <option value="cash_flow">Cash Flow</option>
+                <option value="regions">Regions</option>
+              </select>
+            </label>
+            <label>
+              Period
+              <select id="ticker-period">
+                <option value="false">Annual</option>
+                <option value="true">Quarterly</option>
+              </select>
+            </label>
+            <label>
+              Format
+              <select id="ticker-pivot">
+                <option value="true">Wide</option>
+                <option value="false">Long</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <!-- Info view -->
+        <div class="ticker-view" id="ticker-info-view">
+          <div id="ticker-info-body">
+            <div class="ticker-info-empty">Select a ticker to view company info.</div>
+          </div>
+        </div>
+
+      </section>
+
+      <section class="page" id="single-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Single Ticker Analysis</p>
+            <h1>Statement and regional revenue drilldown</h1>
+          </div>
+          <button class="secondary" data-example="single">Load AAPL</button>
+        </div>
+        <form id="single-form" class="control-surface">
+          <label>
+            Ticker
+            <input name="ticker" value="AAPL" autocomplete="off" />
+          </label>
+          <label>
+            View
+            <select name="view">
+              <option value="income_statement">Income Statement</option>
+              <option value="balance_sheet">Balance Sheet</option>
+              <option value="cash_flow">Cash Flow</option>
+              <option value="regions">Regions</option>
+            </select>
+          </label>
+          <label>
+            Period
+            <select name="quarterly">
+              <option value="false">Annual</option>
+              <option value="true">Quarterly</option>
+            </select>
+          </label>
+          <label>
+            Format
+            <select name="pivot">
+              <option value="true">Wide</option>
+              <option value="false">Long</option>
+            </select>
+          </label>
+          <button type="submit">Run</button>
+        </form>
+      </section>
+
+      <section class="page" id="multi-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Multi Ticker Analysis</p>
+            <h1>Ratios and margins across a watchlist</h1>
+          </div>
+          <button class="secondary" data-example="multi">Load watchlist</button>
+        </div>
+        <form id="multi-form" class="control-surface">
+          <label class="wide">
+            Tickers
+            <textarea name="tickers" rows="2">AAPL, MSFT, GOOGL</textarea>
+          </label>
+          <label>
+            Analysis
+            <select name="analysis">
+              <option value="ratios">Ratio</option>
+              <option value="margins">Margins</option>
+            </select>
+          </label>
+          <label>
+            Period
+            <select name="quarterly">
+              <option value="false">Annual</option>
+              <option value="true">Quarterly</option>
+            </select>
+          </label>
+          <button type="submit">Compare</button>
+        </form>
+      </section>
+
+      <section class="page" id="watchlist-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Watchlist</p>
+            <h1>Create and reuse ticker lists</h1>
+          </div>
+          <button class="secondary" id="new-watchlist" type="button">New Watchlist</button>
+        </div>
+        <div class="watchlist-layout">
+          <form id="watchlist-form" class="control-surface watchlist-editor">
+            <label>
+              Name
+              <input name="name" value="Core Tech" autocomplete="off" />
+            </label>
+            <label class="wide">
+              Manual tickers
+              <textarea name="manual_tickers" rows="3">AAPL, MSFT, GOOGL</textarea>
+            </label>
+            <button type="submit">Save Watchlist</button>
+          </form>
+
+          <form id="csv-form" class="control-surface watchlist-editor">
+            <label class="wide">
+              CSV file
+              <input name="csv_file" type="file" accept=".csv,text/csv" />
+            </label>
+            <label>
+              Ticker Column
+              <input name="ticker_column" value="ticker" autocomplete="off" />
+            </label>
+            <button type="submit">Import CSV</button>
+          </form>
+
+          <section class="watchlists" id="watchlists"></section>
+        </div>
+      </section>
+
+      <section class="page" id="screener-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Screener</p>
+            <h1>Filter tickers by fundamentals</h1>
+          </div>
+          <button class="secondary" id="add-filter" type="button">Add Filter</button>
+        </div>
+        <form id="screener-form" class="control-surface screener-grid">
+          <label class="wide">
+            Universe
+            <textarea name="tickers" rows="2">AAPL, MSFT, GOOGL, META, NVDA</textarea>
+          </label>
+          <label>
+            Period
+            <select name="quarterly">
+              <option value="false">Annual</option>
+              <option value="true">Quarterly TTM</option>
+            </select>
+          </label>
+          <label>
+            Workers
+            <input name="max_workers" type="number" min="1" max="12" value="4" />
+          </label>
+          <div class="filter-list" id="filter-list"></div>
+          <label class="wide">
+            Include metrics
+            <select name="include_metrics" id="include-metrics" multiple size="6"></select>
+          </label>
+          <button type="submit">Screen</button>
+        </form>
+      </section>
+
+      <section class="page" id="dcf-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">DCF</p>
+            <h1>Intrinsic value and ticker comparison</h1>
+          </div>
+          <button class="secondary" data-example="dcf">Load DCF set</button>
+        </div>
+        <form id="dcf-form" class="control-surface">
+          <label class="wide">
+            Tickers
+            <textarea name="tickers" rows="2">AAPL</textarea>
+          </label>
+          <label>
+            Forecast years
+            <input name="forecast_years" type="number" min="1" max="20" value="5" />
+          </label>
+          <label>
+            Discount rate %
+            <input name="discount_rate" type="number" step="0.1" placeholder="10" />
+          </label>
+          <label>
+            Terminal growth %
+            <input name="terminal_growth_rate" type="number" step="0.1" placeholder="3" />
+          </label>
+          <label>
+            Growth override %
+            <input name="growth_rate" type="number" step="0.1" />
+          </label>
+          <label>
+            Growth cap %
+            <input name="max_growth_rate" type="number" step="0.1" />
+          </label>
+          <label class="check">
+            <input name="auto" type="checkbox" />
+            Auto assumptions
+          </label>
+          <label class="check">
+            <input name="compare" type="checkbox" />
+            Compare tickers
+          </label>
+          <label>
+            Workers
+            <input name="max_workers" type="number" min="1" max="12" value="4" />
+          </label>
+          <button type="submit">Value</button>
+        </form>
+      </section>
+
+      <section class="results">
+        <div class="result-head">
+          <div>
+            <p class="eyebrow">Results</p>
+            <h2 id="result-title">Ready</h2>
+          </div>
+          <span id="result-meta"></span>
+        </div>
+        <div id="summary" class="summary"></div>
+        <div id="status" class="status">Choose a page and run an analysis.</div>
+        <div class="table-wrap">
+          <table id="result-table"></table>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+
+    <div class="llm-sidebar" id="llm-sidebar" aria-label="LLM Chat" role="complementary">
+
+      <!-- Chat view (default) -->
+      <div class="llm-view llm-chat-view active" id="llm-chat-view">
+        <div class="llm-header">
+          <span class="llm-header-icon">✦</span>
+          <span class="llm-header-title">Ask LLM</span>
+          <button class="llm-icon-btn" id="llm-settings-btn" type="button" title="Settings">⚙</button>
+          <button class="llm-icon-btn" id="llm-close-btn" type="button" title="Close">✕</button>
+        </div>
+        <div class="llm-ctx-bar" id="llm-ctx-bar">
+          <span class="llm-ctx-dot" id="llm-ctx-dot"></span>
+          <span id="llm-ctx-text">No context</span>
+        </div>
+        <div class="llm-messages" id="llm-messages"></div>
+        <div class="llm-input-area">
+          <textarea
+            class="llm-textarea"
+            id="llm-textarea"
+            placeholder="Ask about this ticker… (Enter to send)"
+            rows="1"
+          ></textarea>
+          <button class="llm-send" id="llm-send" type="button" title="Send">↑</button>
+        </div>
+      </div>
+
+      <!-- Settings view -->
+      <div class="llm-view llm-settings-view" id="llm-settings-view">
+        <div class="llm-header">
+          <span class="llm-header-icon">✦</span>
+          <span class="llm-header-title">Settings</span>
+          <button class="llm-icon-btn" id="llm-back-btn" type="button">← Back</button>
+        </div>
+        <div class="llm-settings-body">
+          <div class="llm-setting-group">
+            <span class="llm-setting-label">Provider</span>
+            <div class="llm-setting-static">Llama.cpp</div>
+          </div>
+          <div class="llm-setting-group">
+            <label class="llm-setting-label" for="llm-server-url">Server URL</label>
+            <input
+              class="llm-setting-input"
+              id="llm-server-url"
+              type="text"
+              placeholder="http://localhost:8080"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <span class="llm-setting-hint">/v1/chat/completions will be appended automatically</span>
+          </div>
+          <div class="llm-setting-group">
+            <span class="llm-setting-label">Connection</span>
+            <span class="llm-conn-status" id="llm-conn-status">—</span>
+          </div>
+          <button class="llm-save-btn" id="llm-save-btn" type="button">Save &amp; Test Connection</button>
+        </div>
+      </div>
+
+    </div>
+    <div class="llm-backdrop" id="llm-backdrop"></div>
+  </body>
+</html>
