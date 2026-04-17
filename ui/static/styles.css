@@ -1252,8 +1252,11 @@ tr:hover td {
 /* ── Chat page ─────────────────────────────────── */
 #chat-page {
   padding: 0;
-  display: flex;
-  flex-direction: column;
+}
+
+main:has(#chat-page.active) {
+  padding: 0;
+  max-width: 100%;
 }
 
 .chat-layout {
@@ -1418,6 +1421,7 @@ tr:hover td {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow-y: auto;
 }
 
 .chat-settings-panel.hidden {
@@ -1448,6 +1452,7 @@ tr:hover td {
   font-size: 0.68rem;
   padding: 4px 6px;
   width: 100%;
+  min-height: unset;
 }
 
 .chat-setting-note {
