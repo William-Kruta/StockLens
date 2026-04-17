@@ -32,6 +32,7 @@
       <nav class="nav">
         <a href="/dashboard" data-route="dashboard">Dashboard</a>
         <a href="/markets" data-route="markets">Markets</a>
+        <a href="/chat" data-route="chat">Chat</a>
         <a href="/multi" data-route="multi">Multi</a>
         <a href="/watchlist" data-route="watchlist">Watchlist</a>
         <a href="/screener" data-route="screener">Screener</a>
@@ -143,6 +144,71 @@
           </div>
         </div>
 
+      </section>
+
+      <section class="page" id="chat-page">
+        <div class="chat-layout">
+
+          <!-- Left panel: conversation list -->
+          <div class="chat-panel">
+            <div class="chat-panel-head">
+              <span class="chat-panel-title">Conversations</span>
+              <button class="chat-new-btn" id="chat-new-btn" type="button">+ New</button>
+            </div>
+            <div class="chat-conv-list" id="chat-conv-list"></div>
+            <div class="chat-panel-foot">
+              <button class="chat-settings-btn" id="chat-settings-btn" type="button" aria-expanded="false" aria-controls="chat-settings-panel">⚙ Settings</button>
+            </div>
+            <div class="chat-settings-panel hidden" id="chat-settings-panel">
+              <div class="chat-setting-group">
+                <label class="chat-setting-label" for="chat-llama-url">Llama.cpp URL</label>
+                <input class="chat-setting-input" id="chat-llama-url" type="text"
+                  placeholder="http://localhost:8080" autocomplete="off" spellcheck="false" />
+              </div>
+              <div class="chat-setting-group">
+                <label class="chat-setting-label" for="chat-claude-model">Claude model</label>
+                <select class="chat-setting-select" id="chat-claude-model">
+                  <option value="claude-opus-4-7">claude-opus-4-7</option>
+                  <option value="claude-sonnet-4-6" selected>claude-sonnet-4-6</option>
+                  <option value="claude-haiku-4-5-20251001">claude-haiku-4-5</option>
+                </select>
+              </div>
+              <div class="chat-setting-group">
+                <label class="chat-setting-label" for="chat-openai-model">OpenAI model</label>
+                <select class="chat-setting-select" id="chat-openai-model">
+                  <option value="gpt-4o" selected>gpt-4o</option>
+                  <option value="gpt-4o-mini">gpt-4o-mini</option>
+                </select>
+              </div>
+              <p class="chat-setting-note">Claude + OpenAI keys are read from SECRS_CLAUDE_API_KEY / SECRS_OPENAI_API_KEY on the server.</p>
+              <button class="chat-settings-save-btn" id="chat-settings-save" type="button">Save</button>
+            </div>
+          </div>
+
+          <!-- Right: active conversation -->
+          <div class="chat-main">
+            <div class="chat-toolbar" id="chat-toolbar">
+              <span class="chat-conv-title-label" id="chat-conv-title"></span>
+              <div class="chat-provider-wrap">
+                <button class="chat-provider-btn" id="chat-provider-btn" type="button" disabled>— ▾</button>
+                <div class="chat-provider-dropdown hidden" id="chat-provider-dropdown"></div>
+              </div>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+              <div class="chat-empty-state" id="chat-empty-state">
+                <p>No conversation selected.</p>
+                <button class="secondary" id="chat-empty-new" type="button">+ New conversation</button>
+              </div>
+            </div>
+            <div class="chat-input-area">
+              <textarea class="chat-input" id="chat-input"
+                placeholder="Ask anything… (Enter to send)"
+                rows="1" disabled></textarea>
+              <button class="chat-send" id="chat-send" type="button" aria-label="Send message" title="Send" disabled>↑</button>
+            </div>
+          </div>
+
+        </div>
       </section>
 
       <section class="page" id="dashboard-page">

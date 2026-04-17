@@ -7,6 +7,7 @@ import io
 import json
 import math
 import mimetypes
+import os
 import time
 from dataclasses import asdict, is_dataclass
 from http import HTTPStatus
@@ -31,6 +32,7 @@ from secrs.utils.stale import _get_us_market_holidays
 STATIC_DIR = Path(__file__).parent / "static"
 PAGE_ROUTES = {
     "/",
+    "/chat",
     "/dashboard",
     "/markets",
     "/multi",
@@ -38,6 +40,83 @@ PAGE_ROUTES = {
     "/screener",
     "/dcf",
 }
+
+
+def _chat_providers() -> dict:
+    return {
+        "claude": bool(os.environ.get("SECRS_CLAUDE_API_KEY")),
+        "openai": bool(os.environ.get("SECRS_OPENAI_API_KEY")),
+    }
+
+
+def _stream_claude(payload: dict):
+    import requests as _req
+    api_key = os.environ.get("SECRS_CLAUDE_API_KEY", "")
+    model = payload.get("model", "claude-sonnet-4-6")
+    messages = payload.get("messages", [])
+    system_text = None
+    if messages and messages[0].get("role") == "system":
+        system_text = messages[0]["content"]
+        messages = messages[1:]
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    body = {"model": model, "max_tokens": 4096, "messages": messages, "stream": True}
+    if system_text:
+        body["system"] = system_text
+    resp = _req.post(
+        "https://api.anthropic.com/v1/messages",
+        headers=headers, json=body, stream=True, timeout=60,
+    )
+    try:
+        resp.raise_for_status()
+    except _req.HTTPError as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        return
+    event_type = None
+    for raw_line in resp.iter_lines(decode_unicode=True):
+        if raw_line.startswith("event:"):
+            event_type = raw_line[6:].strip()
+        elif raw_line.startswith("data:"):
+            data_str = raw_line[5:].strip()
+            if event_type == "content_block_delta":
+                try:
+                    obj = json.loads(data_str)
+                    text = obj.get("delta", {}).get("text", "")
+                    if text:
+                        chunk = json.dumps({"choices": [{"delta": {"content": text}}]})
+                        yield f"data: {chunk}\n\n"
+                except (json.JSONDecodeError, KeyError):
+                    pass
+            elif event_type == "message_stop":
+                yield "data: [DONE]\n\n"
+                return
+
+
+def _stream_openai(payload: dict):
+    import requests as _req
+    api_key = os.environ.get("SECRS_OPENAI_API_KEY", "")
+    model = payload.get("model", "gpt-4o")
+    messages = payload.get("messages", [])
+    headers = {
+        "authorization": f"Bearer {api_key}",
+        "content-type": "application/json",
+    }
+    body = {"model": model, "messages": messages, "stream": True}
+    resp = _req.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=headers, json=body, stream=True, timeout=60,
+    )
+    try:
+        resp.raise_for_status()
+    except _req.HTTPError as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        return
+    for raw_line in resp.iter_lines(decode_unicode=True):
+        if raw_line.startswith("data:"):
+            yield raw_line + "\n\n"
 
 
 def _search(q: str) -> list[dict]:
@@ -1158,6 +1237,9 @@ class UIHandler(BaseHTTPRequestHandler):
         if path == "/api/market-status":
             self._send_json(_market_status())
             return
+        if path == "/api/chat/providers":
+            self._send_json(_chat_providers())
+            return
         if path == "/api/dashboard-indexes":
             try:
                 self._send_json(_dashboard_indexes())
@@ -1193,6 +1275,22 @@ class UIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path in ("/api/chat/claude", "/api/chat/openai"):
+            payload = self._read_json()
+            provider = "claude" if path.endswith("claude") else "openai"
+            key_var = "SECRS_CLAUDE_API_KEY" if provider == "claude" else "SECRS_OPENAI_API_KEY"
+            if not os.environ.get(key_var):
+                self._send_json(
+                    {"error": f"{key_var} environment variable not set"},
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
+            try:
+                gen = _stream_claude(payload) if provider == "claude" else _stream_openai(payload)
+                self._send_sse_stream(gen)
+            except Exception as exc:
+                print(f"[chat] stream error: {exc}", flush=True)
+            return
         handler = API_HANDLERS.get(path)
         if handler is None:
             self.send_error(HTTPStatus.NOT_FOUND, "Not found")
@@ -1227,6 +1325,19 @@ class UIHandler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_sse_stream(self, gen):
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "text/event-stream; charset=utf-8")
+        self.send_header("cache-control", "no-cache")
+        self.send_header("x-accel-buffering", "no")
+        self.end_headers()
+        try:
+            for chunk in gen:
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
 def run(host: str = "127.0.0.1", port: int = 8765):

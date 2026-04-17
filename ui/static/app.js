@@ -20,6 +20,11 @@ const state = {
   llmStreaming: false,
   marketStatus: null,
   marketStatusTimer: null,
+  chatConversations: [],
+  chatActiveId: null,
+  chatStreaming: false,
+  chatProviders: { llama: false, claude: false, openai: false },
+  chatSettingsOpen: false,
 };
 
 // Color + group metadata for each indicator key
@@ -55,6 +60,518 @@ function loadLlmSettings() {
 
 function saveLlmSettings(url) {
   localStorage.setItem(LLM_URL_KEY, url.trim().replace(/\/$/, ""));
+}
+
+const CHAT_STORAGE_KEY = "secrs.chat.conversations";
+const CHAT_SETTINGS_KEY = "secrs.chat.settings";
+const CHAT_MODELS = {
+  claude: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  openai: ["gpt-4o", "gpt-4o-mini"],
+};
+
+function loadChatConversations() {
+  try {
+    return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || "[]");
+  } catch { return []; }
+}
+
+function saveChatConversations(convs) {
+  try {
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(convs));
+  } catch (err) {
+    setStatus("Chat storage full — delete some conversations.", true);
+  }
+}
+
+function loadChatSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(CHAT_SETTINGS_KEY) || "{}");
+  } catch { return {}; }
+}
+
+function saveChatSettings(settings) {
+  const current = loadChatSettings();
+  localStorage.setItem(CHAT_SETTINGS_KEY, JSON.stringify({ ...current, ...settings }));
+}
+
+function createConversation(provider = "claude") {
+  const settings = loadChatSettings();
+  const model = provider === "claude"
+    ? (settings.claudeModel || "claude-sonnet-4-6")
+    : provider === "openai"
+    ? (settings.openaiModel || "gpt-4o")
+    : null;
+  const conv = {
+    id: crypto.randomUUID(),
+    title: "New conversation",
+    provider,
+    model,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: [],
+  };
+  state.chatConversations.unshift(conv);
+  saveChatConversations(state.chatConversations);
+  return conv;
+}
+
+function getActiveConversation() {
+  return state.chatConversations.find((c) => c.id === state.chatActiveId) || null;
+}
+
+function updateConversation(id, changes) {
+  const conv = state.chatConversations.find((c) => c.id === id);
+  if (!conv) return;
+  Object.assign(conv, changes, { updatedAt: Date.now() });
+  state.chatConversations.sort((a, b) => b.updatedAt - a.updatedAt);
+  saveChatConversations(state.chatConversations);
+}
+
+function deleteConversation(id) {
+  state.chatConversations = state.chatConversations.filter((c) => c.id !== id);
+  saveChatConversations(state.chatConversations);
+  if (state.chatActiveId === id) {
+    state.chatActiveId = state.chatConversations[0]?.id || null;
+    renderChatMessages();
+    renderChatToolbar();
+  }
+  renderChatSidebar();
+}
+
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function renderChatSidebar() {
+  const list = $("#chat-conv-list");
+  if (!list) return;
+  if (!state.chatConversations.length) {
+    list.innerHTML = '<div class="chat-conv-empty">No conversations yet.</div>';
+    return;
+  }
+  list.innerHTML = state.chatConversations
+    .map(
+      (conv) => `
+    <div class="chat-conv-item${conv.id === state.chatActiveId ? " active" : ""}"
+         data-conv-id="${conv.id}">
+      <div class="chat-conv-title">${escapeHtml(conv.title)}</div>
+      <div class="chat-conv-meta">${escapeHtml(conv.provider)} · ${timeAgo(conv.updatedAt)}</div>
+      <button class="chat-conv-delete" data-conv-delete="${conv.id}"
+              type="button" aria-label="Delete conversation">×</button>
+    </div>`
+    )
+    .join("");
+  list.querySelectorAll("[data-conv-id]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-conv-delete]")) return;
+      openConversation(el.dataset.convId);
+    });
+  });
+  list.querySelectorAll("[data-conv-delete]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteConversation(btn.dataset.convDelete);
+    });
+  });
+}
+
+function appendChatMessage(role, content, streaming = false, provider = null) {
+  const area = $("#chat-messages");
+  if (!area) return null;
+  const div = document.createElement("div");
+  div.className = `chat-msg ${role}`;
+  const roleEl = document.createElement("span");
+  roleEl.className = "chat-msg-role";
+  roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : (provider || "Assistant");
+  const bubble = document.createElement("div");
+  bubble.className = "chat-msg-bubble";
+  bubble.textContent = content;
+  if (streaming) {
+    const cursor = document.createElement("span");
+    cursor.className = "llm-cursor";
+    bubble.appendChild(cursor);
+  }
+  div.appendChild(roleEl);
+  div.appendChild(bubble);
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+  return bubble;
+}
+
+function renderChatMessages() {
+  const area = $("#chat-messages");
+  if (!area) return;
+  const conv = getActiveConversation();
+  const inputEl = $("#chat-input");
+  const sendEl = $("#chat-send");
+  if (!conv) {
+    area.innerHTML = `
+      <div class="chat-empty-state" id="chat-empty-state">
+        <p>No conversation selected.</p>
+        <button class="secondary" id="chat-empty-new" type="button">+ New conversation</button>
+      </div>`;
+    $("#chat-empty-new")?.addEventListener("click", () => {
+      const c = createConversation(defaultChatProvider());
+      openConversation(c.id);
+      renderChatSidebar();
+    });
+    if (inputEl) inputEl.disabled = true;
+    if (sendEl) sendEl.disabled = true;
+    return;
+  }
+  area.innerHTML = "";
+  conv.messages.forEach((msg) =>
+    appendChatMessage(msg.role, msg.content, false, msg.provider)
+  );
+  area.scrollTop = area.scrollHeight;
+  if (inputEl) inputEl.disabled = false;
+  if (sendEl) sendEl.disabled = false;
+}
+
+function renderChatToolbar() {
+  const titleEl = $("#chat-conv-title");
+  const providerBtn = $("#chat-provider-btn");
+  const conv = getActiveConversation();
+  if (!titleEl || !providerBtn) return;
+  if (!conv) {
+    titleEl.textContent = "";
+    providerBtn.textContent = "— ▾";
+    providerBtn.disabled = true;
+    return;
+  }
+  titleEl.textContent = conv.title;
+  const modelShort = conv.model
+    ? conv.model.split("-").slice(0, 3).join("-")
+    : "";
+  providerBtn.textContent = modelShort
+    ? `${conv.provider} · ${modelShort} ▾`
+    : `${conv.provider} ▾`;
+  providerBtn.disabled = false;
+}
+
+function defaultChatProvider() {
+  if (state.chatProviders.claude) return "claude";
+  if (state.chatProviders.openai) return "openai";
+  return "llama";
+}
+
+function openConversation(id) {
+  state.chatActiveId = id;
+  renderChatSidebar();
+  renderChatMessages();
+  renderChatToolbar();
+  $("#chat-input")?.focus();
+}
+
+async function streamChatResponse(messages, provider, model, bubbleEl) {
+  let url, bodyObj;
+  const headers = { "content-type": "application/json" };
+
+  if (provider === "llama") {
+    const { serverUrl } = loadLlmSettings();
+    url = `${serverUrl.replace(/\/$/, "")}/v1/chat/completions`;
+    bodyObj = { model: "local", messages, stream: true };
+  } else {
+    url = `/api/chat/${provider}`;
+    bodyObj = { messages, model, stream: true };
+  }
+
+  let res;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(bodyObj) });
+  } catch (err) {
+    return { content: "", error: "Could not reach server. Check settings." };
+  }
+
+  if (!res.ok) {
+    let errMsg = `HTTP ${res.status}`;
+    try { const d = await res.json(); errMsg = d.error || errMsg; } catch {}
+    return { content: "", error: errMsg };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+
+  outer: while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (raw === "[DONE]") break outer;
+      try {
+        const obj = JSON.parse(raw);
+        const token = obj.choices?.[0]?.delta?.content;
+        if (token) {
+          content += token;
+          const cursor = bubbleEl.querySelector(".llm-cursor");
+          if (cursor) cursor.remove();
+          bubbleEl.textContent = content;
+          const newCursor = document.createElement("span");
+          newCursor.className = "llm-cursor";
+          bubbleEl.appendChild(newCursor);
+          bubbleEl.closest("#chat-messages")?.scrollTo(0, 999999);
+        }
+      } catch {}
+    }
+  }
+
+  reader.cancel();
+  const cursor = bubbleEl.querySelector(".llm-cursor");
+  if (cursor) cursor.remove();
+  bubbleEl.textContent = content;
+  return { content, error: null };
+}
+
+async function sendChatMessage() {
+  const input = $("#chat-input");
+  const text = input?.value.trim();
+  const conv = getActiveConversation();
+  if (!text || !conv || state.chatStreaming) return;
+
+  state.chatStreaming = true;
+  input.value = "";
+  input.style.height = "38px";
+  $("#chat-send")?.setAttribute("disabled", "");
+
+  const isFirstAssistant = !conv.messages.some((m) => m.role === "assistant");
+  const userMsg = { role: "user", content: text, timestamp: Date.now() };
+  conv.messages.push(userMsg);
+  updateConversation(conv.id, {});
+  appendChatMessage("user", text);
+
+  const { provider, model } = conv;
+  const bubble = appendChatMessage("assistant", "", true, provider);
+  const apiMessages = conv.messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({ role: m.role, content: m.content }));
+
+  try {
+    const { content, error } = await streamChatResponse(apiMessages, provider, model, bubble);
+
+    if (error) {
+      bubble.closest(".chat-msg")?.remove();
+      appendChatMessage("error", `⚠ ${error}`);
+    } else if (content) {
+      const assistantMsg = { role: "assistant", content, provider, model, timestamp: Date.now() };
+      conv.messages.push(assistantMsg);
+      updateConversation(conv.id, {});
+      if (isFirstAssistant) generateChatTitle(conv.id, text, provider, model);
+    }
+  } finally {
+    state.chatStreaming = false;
+    const sendBtn = $("#chat-send");
+    if (sendBtn) sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+async function generateChatTitle(convId, firstMessage, provider, model) {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You generate conversation titles. Reply with ONLY the title — 5 words or fewer, no punctuation at the end.",
+    },
+    { role: "user", content: firstMessage },
+  ];
+  const dummyBubble = document.createElement("div");
+  try {
+    const { content } = await streamChatResponse(messages, provider, model, dummyBubble);
+    const title = content.trim().slice(0, 60);
+    if (title) {
+      updateConversation(convId, { title });
+      renderChatSidebar();
+      if (state.chatActiveId === convId) renderChatToolbar();
+    }
+  } catch {}
+}
+
+function renderChatProviderDropdown() {
+  const dropdown = $("#chat-provider-dropdown");
+  const conv = getActiveConversation();
+  if (!dropdown || !conv) return;
+
+  const providers = [
+    {
+      key: "llama",
+      label: "Llama.cpp",
+      models: null,
+      available: !!loadLlmSettings().serverUrl,
+    },
+    {
+      key: "claude",
+      label: "Claude",
+      models: CHAT_MODELS.claude,
+      available: state.chatProviders.claude,
+    },
+    {
+      key: "openai",
+      label: "OpenAI",
+      models: CHAT_MODELS.openai,
+      available: state.chatProviders.openai,
+    },
+  ];
+
+  dropdown.innerHTML = providers
+    .map(
+      (p) => `
+    <div class="chat-provider-option${!p.available ? " disabled" : ""}${conv.provider === p.key ? " active" : ""}"
+         data-provider="${p.key}"
+         ${!p.available ? 'title="Not configured"' : ""}>
+      <span class="chat-provider-name">${p.label}</span>
+      ${
+        p.models
+          ? `<select class="chat-model-select" data-provider-model="${p.key}"
+               ${!p.available ? "disabled" : ""}>
+               ${p.models
+                 .map(
+                   (m) =>
+                     `<option value="${m}"${conv.provider === p.key && conv.model === m ? " selected" : ""}>${m}</option>`
+                 )
+                 .join("")}
+             </select>`
+          : ""
+      }
+    </div>`
+    )
+    .join("");
+
+  dropdown.querySelectorAll(".chat-provider-option:not(.disabled)").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.tagName === "SELECT" || e.target.tagName === "OPTION") return;
+      const modelSel = el.querySelector("[data-provider-model]");
+      switchChatProvider(el.dataset.provider, modelSel?.value || null);
+    });
+  });
+
+  dropdown.querySelectorAll("[data-provider-model]").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      e.stopPropagation();
+      switchChatProvider(sel.dataset.providerModel, sel.value);
+    });
+  });
+}
+
+function switchChatProvider(provider, model) {
+  const conv = getActiveConversation();
+  if (!conv) return;
+  updateConversation(conv.id, { provider, model });
+  closeChatProviderDropdown();
+  renderChatToolbar();
+}
+
+function openChatProviderDropdown() {
+  renderChatProviderDropdown();
+  $("#chat-provider-dropdown")?.classList.remove("hidden");
+}
+
+function closeChatProviderDropdown() {
+  $("#chat-provider-dropdown")?.classList.add("hidden");
+}
+
+function bindChat() {
+  function newConv() {
+    const conv = createConversation(defaultChatProvider());
+    openConversation(conv.id);
+    renderChatSidebar();
+  }
+
+  $("#chat-new-btn")?.addEventListener("click", newConv);
+  $("#chat-send")?.addEventListener("click", sendChatMessage);
+
+  $("#chat-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
+  $("#chat-input")?.addEventListener("input", () => {
+    const ta = $("#chat-input");
+    ta.style.height = "38px";
+    ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`;
+  });
+
+  $("#chat-provider-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const dropdown = $("#chat-provider-dropdown");
+    if (dropdown?.classList.contains("hidden")) {
+      openChatProviderDropdown();
+    } else {
+      closeChatProviderDropdown();
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".chat-provider-wrap")) closeChatProviderDropdown();
+  });
+
+  $("#chat-settings-btn")?.addEventListener("click", () => {
+    state.chatSettingsOpen = !state.chatSettingsOpen;
+    const panel = $("#chat-settings-panel");
+    panel?.classList.toggle("hidden", !state.chatSettingsOpen);
+    panel?.setAttribute("aria-expanded", String(state.chatSettingsOpen));
+    $("#chat-settings-btn")?.setAttribute("aria-expanded", String(state.chatSettingsOpen));
+    if (state.chatSettingsOpen) {
+      const s = loadChatSettings();
+      const llamaUrl = $("#chat-llama-url");
+      const claudeModel = $("#chat-claude-model");
+      const openaiModel = $("#chat-openai-model");
+      if (llamaUrl) llamaUrl.value = loadLlmSettings().serverUrl;
+      if (claudeModel) claudeModel.value = s.claudeModel || "claude-sonnet-4-6";
+      if (openaiModel) openaiModel.value = s.openaiModel || "gpt-4o";
+    }
+  });
+
+  $("#chat-settings-save")?.addEventListener("click", () => {
+    const url = $("#chat-llama-url")?.value.trim();
+    if (url) saveLlmSettings(url);
+    saveChatSettings({
+      claudeModel: $("#chat-claude-model")?.value || "claude-sonnet-4-6",
+      openaiModel: $("#chat-openai-model")?.value || "gpt-4o",
+    });
+    state.chatProviders.llama = !!loadLlmSettings().serverUrl;
+    state.chatSettingsOpen = false;
+    const panel = $("#chat-settings-panel");
+    panel?.classList.add("hidden");
+    $("#chat-settings-btn")?.setAttribute("aria-expanded", "false");
+  });
+}
+
+async function initChat() {
+  if (state.chatStreaming) return;
+  state.chatConversations = loadChatConversations();
+  try {
+    const data = await fetch("/api/chat/providers").then((r) => r.json());
+    state.chatProviders = {
+      llama: !!loadLlmSettings().serverUrl,
+      claude: !!data.claude,
+      openai: !!data.openai,
+    };
+  } catch {
+    state.chatProviders = {
+      llama: !!loadLlmSettings().serverUrl,
+      claude: false,
+      openai: false,
+    };
+  }
+  renderChatSidebar();
+  if (state.chatConversations.length) {
+    openConversation(state.chatConversations[0].id);
+  } else {
+    renderChatMessages();
+    renderChatToolbar();
+  }
 }
 
 async function testLlmConnection(url) {
@@ -468,7 +985,7 @@ function routeFromPath() {
   const path = location.pathname;
   if (path.startsWith("/ticker/")) return "ticker";
   const route = path.replace("/", "") || "dashboard";
-  return ["dashboard", "markets", "multi", "watchlist", "screener", "dcf"].includes(route) ? route : "dashboard";
+  return ["dashboard", "chat", "markets", "multi", "watchlist", "screener", "dcf"].includes(route) ? route : "dashboard";
 }
 
 function tickerFromPath() {
@@ -2072,6 +2589,7 @@ function bindNavigation() {
       setRoute(link.dataset.route);
       if (link.dataset.route === "dashboard") runDashboard();
       if (link.dataset.route === "markets") runMarkets(state.marketsSub || "most_active");
+      if (link.dataset.route === "chat") initChat();
     });
   });
   $("#page-back-btn").addEventListener("click", goBackFromTicker);
@@ -2280,6 +2798,7 @@ loadOptions().then(() => {
   bindIndicatorChips();
   bindCompareControls();
   bindLlmSidebar();
+  bindChat();
   initSearch();
   initMarketStatus();
   renderWatchlists();
@@ -2303,6 +2822,7 @@ loadOptions().then(() => {
     setRoute(route, true);
     if (route === "dashboard") runDashboard();
     if (route === "markets") runMarkets("most_active");
+    if (route === "chat") initChat();
   }
 
   window.addEventListener("popstate", (event) => {
@@ -2324,6 +2844,7 @@ loadOptions().then(() => {
       setRoute(r, true);
       if (r === "dashboard") runDashboard();
       if (r === "markets") runMarkets(state.marketsSub || "most_active");
+      if (r === "chat") initChat();
     }
   });
 });
