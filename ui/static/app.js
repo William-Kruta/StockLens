@@ -49,6 +49,13 @@ function saveLlmSettings(url) {
   localStorage.setItem(LLM_URL_KEY, url.trim().replace(/\/$/, ""));
 }
 
+const CHAT_STORAGE_KEY = "secrs.chat.conversations";
+const CHAT_SETTINGS_KEY = "secrs.chat.settings";
+const CHAT_MODELS = {
+  claude: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  openai: ["gpt-4o", "gpt-4o-mini"],
+};
+
 function loadChatConversations() {
   try {
     return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || "[]");
@@ -73,13 +80,6 @@ function saveChatSettings(settings) {
   const current = loadChatSettings();
   localStorage.setItem(CHAT_SETTINGS_KEY, JSON.stringify({ ...current, ...settings }));
 }
-
-const CHAT_STORAGE_KEY = "secrs.chat.conversations";
-const CHAT_SETTINGS_KEY = "secrs.chat.settings";
-const CHAT_MODELS = {
-  claude: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
-  openai: ["gpt-4o", "gpt-4o-mini"],
-};
 
 function createConversation(provider = "claude") {
   const settings = loadChatSettings();
@@ -275,7 +275,6 @@ async function streamChatResponse(messages, provider, model, bubbleEl) {
   }
 
   if (!res.ok) {
-    res.body.cancel();
     let errMsg = `HTTP ${res.status}`;
     try { const d = await res.json(); errMsg = d.error || errMsg; } catch {}
     return { content: "", error: errMsg };
@@ -343,22 +342,24 @@ async function sendChatMessage() {
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => ({ role: m.role, content: m.content }));
 
-  const { content, error } = await streamChatResponse(apiMessages, provider, model, bubble);
+  try {
+    const { content, error } = await streamChatResponse(apiMessages, provider, model, bubble);
 
-  if (error) {
-    bubble.closest(".chat-msg")?.remove();
-    appendChatMessage("error", `⚠ ${error}`);
-  } else if (content) {
-    const assistantMsg = { role: "assistant", content, provider, model, timestamp: Date.now() };
-    conv.messages.push(assistantMsg);
-    updateConversation(conv.id, {});
-    if (isFirstAssistant) generateChatTitle(conv.id, text, provider, model);
+    if (error) {
+      bubble.closest(".chat-msg")?.remove();
+      appendChatMessage("error", `⚠ ${error}`);
+    } else if (content) {
+      const assistantMsg = { role: "assistant", content, provider, model, timestamp: Date.now() };
+      conv.messages.push(assistantMsg);
+      updateConversation(conv.id, {});
+      if (isFirstAssistant) generateChatTitle(conv.id, text, provider, model);
+    }
+  } finally {
+    state.chatStreaming = false;
+    const sendBtn = $("#chat-send");
+    if (sendBtn) sendBtn.disabled = false;
+    input.focus();
   }
-
-  state.chatStreaming = false;
-  const sendBtn = $("#chat-send");
-  if (sendBtn) sendBtn.disabled = false;
-  input.focus();
 }
 
 async function generateChatTitle(convId, firstMessage, provider, model) {
@@ -473,7 +474,6 @@ function bindChat() {
   }
 
   $("#chat-new-btn")?.addEventListener("click", newConv);
-  $("#chat-empty-new")?.addEventListener("click", newConv);
   $("#chat-send")?.addEventListener("click", sendChatMessage);
 
   $("#chat-input")?.addEventListener("keydown", (e) => {
@@ -536,6 +536,7 @@ function bindChat() {
 }
 
 async function initChat() {
+  if (state.chatStreaming) return;
   state.chatConversations = loadChatConversations();
   try {
     const data = await fetch("/api/chat/providers").then((r) => r.json());
