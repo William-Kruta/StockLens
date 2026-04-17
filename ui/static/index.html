@@ -10,7 +10,7 @@
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/single" data-route="single">
+      <a class="brand" href="/dashboard" data-route="dashboard">
         <span>secrs</span>
       </a>
 
@@ -30,16 +30,30 @@
       </div>
 
       <nav class="nav">
-        <a href="/single" data-route="single">Single</a>
+        <a href="/dashboard" data-route="dashboard">Dashboard</a>
+        <a href="/markets" data-route="markets">Markets</a>
         <a href="/multi" data-route="multi">Multi</a>
         <a href="/watchlist" data-route="watchlist">Watchlist</a>
         <a href="/screener" data-route="screener">Screener</a>
         <a href="/dcf" data-route="dcf">DCF</a>
       </nav>
-      <button class="llm-btn" id="llm-btn" type="button">✦ Ask LLM</button>
     </header>
+    <button class="llm-btn" id="llm-btn" type="button">✦ Ask LLM</button>
 
     <main>
+      <div class="subheader-row">
+        <div class="page-back-row hidden" id="page-back-row">
+          <button class="page-back-btn" id="page-back-btn" type="button" aria-label="Go back">
+            <span aria-hidden="true">←</span>
+            <span>Back</span>
+          </button>
+        </div>
+        <div class="market-status closed" id="market-status">
+          <span class="market-status-dot"></span>
+          <span class="market-status-label" id="market-status-label">Market Status</span>
+          <span class="market-status-time" id="market-status-time">Loading…</span>
+        </div>
+      </div>
 
       <!-- Ticker landing page -->
       <section class="page" id="ticker-page">
@@ -47,9 +61,6 @@
           <div>
             <p class="eyebrow" id="ticker-eyebrow">Ticker</p>
             <h1 id="ticker-heading">—</h1>
-          </div>
-          <div class="ticker-header-actions">
-            <button class="secondary" id="btn-ticker-single" type="button">Open in Single ↗</button>
           </div>
         </div>
 
@@ -70,8 +81,10 @@
               <button class="chart-range" data-period="1y"  data-interval="1d">1Y</button>
               <button class="chart-range" data-period="5y"  data-interval="1wk">5Y</button>
               <button class="chart-range" data-period="max" data-interval="1wk">MAX</button>
+              <button class="chart-compare-btn" id="chart-compare-btn" type="button">Compare</button>
             </div>
-            <div class="indicator-bar">
+            <div class="compare-tile-bar hidden" id="compare-tile-bar"></div>
+            <div class="indicator-bar" id="indicator-bar">
               <div class="ind-group">
                 <span class="ind-group-label">Overlays</span>
                 <button class="ind-chip" data-indicator="sma_20"  data-color="#4FC3F7">SMA 20</button>
@@ -132,44 +145,97 @@
 
       </section>
 
-      <section class="page" id="single-page">
+      <section class="page" id="dashboard-page">
         <div class="page-head">
           <div>
-            <p class="eyebrow">Single Ticker Analysis</p>
-            <h1>Statement and regional revenue drilldown</h1>
+            <p class="eyebrow">Dashboard</p>
+            <h1>Market pulse</h1>
           </div>
-          <button class="secondary" data-example="single">Load AAPL</button>
         </div>
-        <form id="single-form" class="control-surface">
-          <label>
-            Ticker
-            <input name="ticker" value="AAPL" autocomplete="off" />
-          </label>
-          <label>
-            View
-            <select name="view">
-              <option value="income_statement">Income Statement</option>
-              <option value="balance_sheet">Balance Sheet</option>
-              <option value="cash_flow">Cash Flow</option>
-              <option value="regions">Regions</option>
-            </select>
-          </label>
-          <label>
-            Period
-            <select name="quarterly">
-              <option value="false">Annual</option>
-              <option value="true">Quarterly</option>
-            </select>
-          </label>
-          <label>
-            Format
-            <select name="pivot">
-              <option value="true">Wide</option>
-              <option value="false">Long</option>
-            </select>
-          </label>
-          <button type="submit">Run</button>
-        </form>
+
+        <div class="dashboard-grid">
+          <button class="dashboard-card" type="button" data-dashboard-market="gainers" aria-label="Open top gainers">
+            <div class="dashboard-card-head">
+              <div>
+                <p class="eyebrow">Top 5</p>
+                <h2>Gainers</h2>
+              </div>
+              <span>Open</span>
+            </div>
+            <div class="dashboard-table" id="dashboard-gainers">
+              <div class="dashboard-loading">Loading...</div>
+            </div>
+          </button>
+
+          <button class="dashboard-card" type="button" data-dashboard-market="losers" aria-label="Open top losers">
+            <div class="dashboard-card-head">
+              <div>
+                <p class="eyebrow">Top 5</p>
+                <h2>Losers</h2>
+              </div>
+              <span>Open</span>
+            </div>
+            <div class="dashboard-table" id="dashboard-losers">
+              <div class="dashboard-loading">Loading...</div>
+            </div>
+          </button>
+
+          <button class="dashboard-card" type="button" data-dashboard-market="unusual_volume" aria-label="Open unusual volume">
+            <div class="dashboard-card-head">
+              <div>
+                <p class="eyebrow">Top 5</p>
+                <h2>Unusual Volume</h2>
+              </div>
+              <span>Open</span>
+            </div>
+            <div class="dashboard-table" id="dashboard-unusual-volume">
+              <div class="dashboard-loading">Loading...</div>
+            </div>
+          </button>
+        </div>
+
+        <section class="dashboard-indexes" aria-label="Major indexes">
+          <div class="dashboard-indexes-head">
+            <div>
+              <p class="eyebrow">Today</p>
+              <h2>Major indexes</h2>
+            </div>
+            <span id="dashboard-index-meta">Loading...</span>
+          </div>
+          <div class="index-strip" id="dashboard-index-strip"></div>
+        </section>
+
+        <section class="dashboard-indexes dashboard-futures" aria-label="Futures and market signals">
+          <div class="dashboard-indexes-head">
+            <div>
+              <p class="eyebrow">Signals</p>
+              <h2>Futures & signals</h2>
+            </div>
+            <span id="dashboard-futures-meta">Loading...</span>
+          </div>
+          <div class="index-strip futures-strip" id="dashboard-futures-strip"></div>
+        </section>
+      </section>
+
+      <section class="page" id="markets-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Markets</p>
+            <h1>Live market data from Yahoo Finance</h1>
+          </div>
+        </div>
+        <div class="markets-tabs">
+          <button class="markets-tab active" data-markets-sub="most_active">Most Active</button>
+          <button class="markets-tab" data-markets-sub="trending">Trending</button>
+          <button class="markets-tab" data-markets-sub="gainers">Top Gainers</button>
+          <button class="markets-tab" data-markets-sub="losers">Top Losers</button>
+          <button class="markets-tab" data-markets-sub="unusual_volume">Unusual Volume</button>
+          <button class="markets-tab" data-markets-sub="small_cap">Small Cap</button>
+          <button class="markets-tab" data-markets-sub="commodities">Commodities</button>
+          <button class="markets-tab" data-markets-sub="world_indices">World Indices</button>
+          <button class="markets-tab" data-markets-sub="ipo">IPO</button>
+          <button class="markets-tab" data-markets-sub="private_companies">Private Companies</button>
+        </div>
       </section>
 
       <section class="page" id="multi-page">
@@ -337,6 +403,30 @@
         </div>
       </section>
     </main>
+
+    <div class="modal-backdrop hidden" id="compare-modal" role="dialog" aria-modal="true" aria-labelledby="compare-modal-title">
+      <div class="compare-modal-panel">
+        <div class="compare-modal-head">
+          <div>
+            <p class="eyebrow">Compare</p>
+            <h2 id="compare-modal-title">Add a ticker</h2>
+          </div>
+          <button class="modal-close-btn" id="compare-modal-close" type="button" aria-label="Close compare dialog">✕</button>
+        </div>
+        <div class="compare-search-wrap">
+          <input
+            class="search-input"
+            id="compare-search-input"
+            type="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Search ticker…"
+            aria-label="Search comparison ticker"
+          />
+          <ul class="search-dropdown" id="compare-search-dropdown" role="listbox"></ul>
+        </div>
+      </div>
+    </div>
 
     <div class="llm-sidebar" id="llm-sidebar" aria-label="LLM Chat" role="complementary">
 

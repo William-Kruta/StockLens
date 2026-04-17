@@ -1,19 +1,25 @@
 const state = {
-  route: "single",
+  route: "dashboard",
+  marketsSub: "most_active",
+  marketsCache: new Map(),
   metrics: [],
   watchlists: [],
   editingWatchlist: null,
   expandedWatchlists: new Set(),
   ticker: null,
   tickerName: null,
+  tickerBackPath: null,
   tickerMainTab: "chart",
   tickerView: "income_statement",
   chartPeriod: "1mo",
   chartInterval: "1d",
+  compareTickers: [],
   indicators: new Set(),   // active indicator keys
   llmOpen: false,
   llmHistory: [],    // [{role, content}] persists across navigation
   llmStreaming: false,
+  marketStatus: null,
+  marketStatusTimer: null,
 };
 
 // Color + group metadata for each indicator key
@@ -28,11 +34,18 @@ const INDICATOR_DEFS = {
   rsi:     { color: "#C8FF00", group: "panel"   },
   atr:     { color: "#FFB800", group: "panel"   },
 };
+const COMPARE_COLORS = ["#4FC3F7", "#FFB800", "#FF4B4B", "#00E5A0", "#FF8A65", "#B388FF"];
+const DASHBOARD_MARKETS = [
+  { sub: "gainers", id: "dashboard-gainers" },
+  { sub: "losers", id: "dashboard-losers" },
+  { sub: "unusual_volume", id: "dashboard-unusual-volume" },
+];
 
 // ── LLM Sidebar ────────────────────────────────────────────────
 
 const LLM_URL_KEY = "secrs.llm_server_url";
 const LLM_HISTORY_MAX = 20;
+const MARKETS_CLIENT_CACHE_TTL_MS = 60_000;
 
 function loadLlmSettings() {
   return {
@@ -94,8 +107,9 @@ function buildLlmContext() {
 
     if (tab === "chart") {
       const inds = [...state.indicators].join(", ") || "none";
+      const comparisons = state.compareTickers.map((item) => item.ticker).join(", ") || "none";
       return {
-        description: `${ticker} chart — period: ${state.chartPeriod}, interval: ${state.chartInterval}, indicators: ${inds}`,
+        description: `${ticker} chart — period: ${state.chartPeriod}, interval: ${state.chartInterval}, indicators: ${inds}, comparisons: ${comparisons}`,
         data: null,
       };
     }
@@ -117,12 +131,17 @@ function buildLlmContext() {
     }
   }
 
-  if (route === "single") {
-    const ticker = ($("#single-form")?.elements?.ticker?.value || "").toUpperCase();
-    const view = $("#single-form")?.elements?.view?.value || "statement";
+  if (route === "markets") {
     return {
-      description: `${ticker} ${view.replace(/_/g, " ")}`,
+      description: `Markets — ${state.marketsSub.replace(/_/g, " ")}`,
       data: getLlmTableRows(20),
+    };
+  }
+
+  if (route === "dashboard") {
+    return {
+      description: "Dashboard — market pulse",
+      data: null,
     };
   }
 
@@ -167,6 +186,219 @@ function buildSystemPrompt() {
   return prompt;
 }
 
+async function getMarketsData(sub) {
+  const cached = state.marketsCache.get(sub);
+  if (cached && Date.now() - cached.fetchedAt < MARKETS_CLIENT_CACHE_TTL_MS) {
+    return { data: cached.data, source: "client" };
+  }
+
+  const response = await fetch(`/api/markets?sub=${encodeURIComponent(sub)}`);
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+  state.marketsCache.set(sub, { fetchedAt: Date.now(), data });
+  return { data, source: "server" };
+}
+
+function renderMarkets(data, source = "server") {
+  $("#result-title").textContent = data.title;
+  renderTable(data.data);
+
+  const symbolColumn = data.data.columns.find((column) => column.toLowerCase() === "symbol");
+  const nameColumn = data.data.columns.find((column) => column.toLowerCase() === "name");
+  $$("#result-table tbody tr").forEach((tr, index) => {
+    const row = data.data.rows[index];
+    const symbol = cleanMarketSymbol(row?.[symbolColumn]);
+    const name = row?.[nameColumn]?.toString().trim() || symbol;
+    if (!symbol) return;
+    tr.style.cursor = "pointer";
+    tr.addEventListener("click", () => openTickerPage(symbol, name));
+  });
+
+  const cache = data.cache;
+  let cacheNote = "live";
+  if (source === "client") {
+    cacheNote = "client cache";
+  } else if (cache?.market_date) {
+    cacheNote = `${cache.status} cache for ${cache.market_date}`;
+  } else if (cache) {
+    cacheNote = `${cache.status} cache, ${cache.age_seconds}s old`;
+  }
+  const warning = data.warning ? ` · ${data.warning}` : "";
+  setStatus(`${data.data.rows.length} tickers · ${cacheNote}${warning}`, false);
+  if (state.llmOpen) updateLlmContextBar();
+}
+
+async function runMarkets(sub = "most_active") {
+  state.marketsSub = sub;
+  $$(".markets-tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.marketsSub === sub);
+  });
+
+  $(".results").classList.remove("hidden");
+  $("#summary").innerHTML = "";
+
+  $("#result-title").textContent = "Markets";
+  $("#result-table").innerHTML = "";
+  $("#result-meta").textContent = "";
+  setStatus("Loading…", false);
+
+  try {
+    const { data, source } = await getMarketsData(sub);
+    renderMarkets(data, source);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function runDashboard() {
+  $(".results").classList.add("hidden");
+  await Promise.all(DASHBOARD_MARKETS.map(loadDashboardMarket));
+  loadDashboardIndexes();
+  loadDashboardFutures();
+}
+
+async function loadDashboardMarket(item) {
+  const target = $(`#${item.id}`);
+  if (!target) return;
+  target.innerHTML = `<div class="dashboard-loading">Loading...</div>`;
+  try {
+    const { data } = await getMarketsData(item.sub);
+    renderDashboardMarket(target, data, item.sub);
+  } catch (error) {
+    target.innerHTML = `<div class="dashboard-empty">${error.message}</div>`;
+  }
+}
+
+function renderDashboardMarket(target, data, sub) {
+  const rows = data?.data?.rows || [];
+  const columns = data?.data?.columns || [];
+  const symbolColumn = columns.find((column) => column.toLowerCase() === "symbol");
+  const nameColumn = columns.find((column) => column.toLowerCase() === "name");
+  const changeColumn = columns.find((column) => column.toLowerCase() === "change %")
+    || columns.find((column) => /^change/i.test(column));
+  target.innerHTML = "";
+
+  rows.slice(0, 5).forEach((row) => {
+    const symbol = cleanMarketSymbol(row?.[symbolColumn]);
+    const name = row?.[nameColumn]?.toString().trim() || symbol;
+    const change = changeColumn ? formatValue(row?.[changeColumn]) : "";
+    const div = document.createElement("div");
+    div.className = "dashboard-mini-row";
+    div.innerHTML = `
+      <span class="dashboard-symbol"></span>
+      <span class="dashboard-name"></span>
+      <span class="dashboard-change"></span>
+    `;
+    div.querySelector(".dashboard-symbol").textContent = symbol;
+    div.querySelector(".dashboard-name").textContent = name;
+    const changeEl = div.querySelector(".dashboard-change");
+    changeEl.textContent = change;
+    const numeric = parseSignedNumber(change);
+    if (numeric !== null && numeric !== 0) {
+      changeEl.classList.add(numeric > 0 ? "value-positive" : "value-negative");
+    }
+    target.appendChild(div);
+  });
+
+  if (!target.children.length) {
+    target.innerHTML = `<div class="dashboard-empty">No rows returned.</div>`;
+  }
+}
+
+async function loadDashboardIndexes() {
+  const strip = $("#dashboard-index-strip");
+  const meta = $("#dashboard-index-meta");
+  if (!strip || !meta) return;
+  strip.innerHTML = `<div class="dashboard-loading">Loading...</div>`;
+  meta.textContent = "Loading...";
+  try {
+    const response = await fetch("/api/dashboard-indexes");
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+    renderDashboardIndexes(data);
+  } catch (error) {
+    meta.textContent = "Unavailable";
+    strip.innerHTML = `<div class="dashboard-empty">${error.message}</div>`;
+  }
+}
+
+function renderDashboardIndexes(data) {
+  const strip = $("#dashboard-index-strip");
+  const meta = $("#dashboard-index-meta");
+  strip.innerHTML = "";
+  (data.indexes || []).forEach((item) => {
+    const change = typeof item.change_pct === "number" ? item.change_pct : null;
+    const tile = document.createElement("div");
+    tile.className = "index-tile";
+    tile.innerHTML = `
+      <div class="index-name"></div>
+      <div class="index-symbol"></div>
+      <div class="index-change"></div>
+    `;
+    tile.querySelector(".index-name").textContent = item.name;
+    tile.querySelector(".index-symbol").textContent = item.symbol;
+    const changeEl = tile.querySelector(".index-change");
+    changeEl.textContent = change === null ? "—" : `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`;
+    if (change !== null && change !== 0) {
+      changeEl.classList.add(change > 0 ? "value-positive" : "value-negative");
+    }
+    strip.appendChild(tile);
+  });
+  if (!strip.children.length) {
+    strip.innerHTML = `<div class="dashboard-empty">No index data returned.</div>`;
+  }
+  const cache = data.cache;
+  meta.textContent = cache ? `${cache.status} cache, ${cache.age_seconds}s old` : "Latest close";
+}
+
+async function loadDashboardFutures() {
+  const strip = $("#dashboard-futures-strip");
+  const meta = $("#dashboard-futures-meta");
+  if (!strip || !meta) return;
+  strip.innerHTML = `<div class="dashboard-loading">Loading...</div>`;
+  meta.textContent = "Loading...";
+  try {
+    const response = await fetch("/api/dashboard-futures");
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+    renderDashboardFutures(data);
+  } catch (error) {
+    meta.textContent = "Unavailable";
+    strip.innerHTML = `<div class="dashboard-empty">${error.message}</div>`;
+  }
+}
+
+function renderDashboardFutures(data) {
+  const strip = $("#dashboard-futures-strip");
+  const meta = $("#dashboard-futures-meta");
+  strip.innerHTML = "";
+  (data.items || []).forEach((item) => {
+    const change = typeof item.change_pct === "number" ? item.change_pct : null;
+    const tile = document.createElement("div");
+    tile.className = "index-tile";
+    tile.innerHTML = `
+      <div class="index-name"></div>
+      <div class="index-symbol"></div>
+      <div class="index-price"></div>
+      <div class="index-change"></div>
+    `;
+    tile.querySelector(".index-name").textContent = item.name;
+    tile.querySelector(".index-symbol").textContent = item.symbol;
+    tile.querySelector(".index-price").textContent = item.close == null ? "—" : formatValue(item.close);
+    const changeEl = tile.querySelector(".index-change");
+    changeEl.textContent = change === null ? "—" : `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`;
+    if (change !== null && change !== 0) {
+      changeEl.classList.add(change > 0 ? "value-positive" : "value-negative");
+    }
+    strip.appendChild(tile);
+  });
+  if (!strip.children.length) {
+    strip.innerHTML = `<div class="dashboard-empty">No futures data returned.</div>`;
+  }
+  const cache = data.cache;
+  meta.textContent = cache ? `${cache.status} cache, ${cache.age_seconds}s old` : "Latest close";
+}
+
 function updateLlmContextBar() {
   const ctx = buildLlmContext();
   const text = $("#llm-ctx-text");
@@ -176,14 +408,67 @@ function updateLlmContextBar() {
   dot.classList.toggle("inactive", !ctx.description || ctx.description.includes("—"));
 }
 
+async function loadMarketStatus() {
+  try {
+    const res = await fetch("/api/market-status");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.marketStatus = await res.json();
+    renderMarketStatus();
+  } catch {
+    const status = $("#market-status");
+    status.classList.remove("open");
+    status.classList.add("closed");
+    $("#market-status-label").textContent = "Market Status";
+    $("#market-status-time").textContent = "Unavailable";
+  }
+}
+
+function renderMarketStatus() {
+  const data = state.marketStatus;
+  if (!data) return;
+  const status = $("#market-status");
+  const label = $("#market-status-label");
+  const time = $("#market-status-time");
+  const targetMs = Date.parse(data.target);
+  const remainingMs = Math.max(0, targetMs - Date.now());
+
+  status.classList.toggle("open", Boolean(data.is_open));
+  status.classList.toggle("closed", !data.is_open);
+  label.textContent = data.label;
+  time.textContent = `${formatCountdown(remainingMs)} until ${data.target_label}`;
+
+  if (remainingMs === 0) {
+    loadMarketStatus();
+  }
+}
+
+function formatCountdown(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours >= 24) {
+    const days = Math.floor(hours / 24);
+    const restHours = hours % 24;
+    return `${days}d ${restHours}h ${minutes}m`;
+  }
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function initMarketStatus() {
+  loadMarketStatus();
+  state.marketStatusTimer = setInterval(renderMarketStatus, 1000);
+  setInterval(loadMarketStatus, 5 * 60 * 1000);
+}
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 function routeFromPath() {
   const path = location.pathname;
   if (path.startsWith("/ticker/")) return "ticker";
-  const route = path.replace("/", "") || "single";
-  return ["single", "multi", "watchlist", "screener", "dcf"].includes(route) ? route : "single";
+  const route = path.replace("/", "") || "dashboard";
+  return ["dashboard", "markets", "multi", "watchlist", "screener", "dcf"].includes(route) ? route : "dashboard";
 }
 
 function tickerFromPath() {
@@ -195,27 +480,41 @@ function setRoute(route, replace = false) {
   state.route = route;
   $$(".page").forEach((page) => page.classList.remove("active"));
   $(`#${route}-page`).classList.add("active");
+  $("#page-back-row")?.classList.toggle("hidden", route !== "ticker");
   $$(".nav a").forEach((link) => {
     link.classList.toggle("active", link.dataset.route === route);
   });
   if (!replace && route !== "ticker") history.pushState({}, "", `/${route}`);
+  if (route !== "ticker") state.tickerBackPath = null;
+  if (route === "dashboard") $(".results").classList.add("hidden");
   if (state.llmOpen) updateLlmContextBar();
 }
 
 // ── Ticker landing page ────────────────────────────────────
 function openTickerPage(ticker, name) {
+  state.tickerBackPath = `${location.pathname}${location.search}`;
   state.ticker = ticker;
   state.tickerName = name || ticker;
   state.tickerMainTab = "chart";
   state.tickerView = "income_statement";
+  state.compareTickers = [];
 
   $("#ticker-eyebrow").textContent = ticker;
   $("#ticker-heading").textContent = name || ticker;
 
   setTickerMainTab("chart");
-  history.pushState({}, "", `/ticker/${ticker}`);
+  history.pushState({ tickerBackPath: state.tickerBackPath }, "", `/ticker/${ticker}`);
   setRoute("ticker", true);
   runTickerChart();
+}
+
+function goBackFromTicker() {
+  if (state.tickerBackPath) {
+    history.back();
+    return;
+  }
+  setRoute("markets");
+  runMarkets(state.marketsSub || "most_active");
 }
 
 function setTickerMainTab(tab) {
@@ -237,23 +536,28 @@ async function runTickerChart() {
   if (!ticker) return;
   const period     = state.chartPeriod   || "1mo";
   const interval   = state.chartInterval || "1d";
-  const needsInds  = state.indicators.size > 0;
+  const comparing  = state.compareTickers.length > 0;
+  const needsInds  = !comparing && state.indicators.size > 0;
 
   const wrap = $("#ticker-chart-wrap");
   wrap.innerHTML = `<div class="chart-loading">Loading…</div>`;
   // Remove any previous subchart panels
   $$(".subchart-wrap").forEach((el) => el.remove());
+  renderCompareTiles();
 
   try {
-    const res = await fetch("/api/candles", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ticker, period, interval, indicators: needsInds }),
-    });
-    if (!res.ok) throw new Error(`Server error ${res.status}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    const rows = data.rows || [];
+    const rows = await fetchCandleRows(ticker, period, interval, needsInds);
+
+    if (comparing) {
+      const compareSeries = await Promise.all(
+        state.compareTickers.map(async (item) => ({
+          ...item,
+          rows: await fetchCandleRows(item.ticker, period, interval, false),
+        }))
+      );
+      renderCompareChart(rows, wrap, compareSeries);
+      return;
+    }
 
     const activeOverlays = [...state.indicators].filter(
       (k) => INDICATOR_DEFS[k]?.group === "overlay"
@@ -279,6 +583,221 @@ async function runTickerChart() {
   } catch (err) {
     wrap.innerHTML = `<div class="chart-empty">${escapeHtml(err.message)}</div>`;
   }
+}
+
+async function fetchCandleRows(ticker, period, interval, indicators) {
+  const res = await fetch("/api/candles", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ticker, period, interval, indicators }),
+  });
+  if (!res.ok) throw new Error(`Server error ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data.rows || [];
+}
+
+function normalizedPerformanceRows(rows) {
+  const base = rows.find((row) => Number(row.close) > 0);
+  if (!base) return [];
+  const baseClose = Number(base.close);
+  return rows.map((row) => ({
+    date: String(row.date).slice(0, 10),
+    value: Number(row.close) > 0 ? ((Number(row.close) / baseClose) - 1) * 100 : null,
+  }));
+}
+
+function renderCompareChart(mainRows, container, compareSeries) {
+  container.innerHTML = "";
+  if (!mainRows.length) {
+    container.innerHTML = '<div class="chart-empty">No data available.</div>';
+    return;
+  }
+
+  const W = container.clientWidth || 760;
+  const H = 320;
+  const pL = 62, pR = 78, pT = 18, pB = 36;
+  const innerH = H - pT - pB;
+  const NS = "http://www.w3.org/2000/svg";
+
+  const main = {
+    ticker: state.ticker,
+    name: state.ticker,
+    color: "#C8FF00",
+    points: normalizedPerformanceRows(mainRows),
+  };
+  const others = compareSeries.map((series) => {
+    const byDate = new Map(normalizedPerformanceRows(series.rows).map((point) => [point.date, point.value]));
+    return {
+      ticker: series.ticker,
+      name: series.name || series.ticker,
+      color: series.color,
+      points: main.points.map((point) => ({
+        date: point.date,
+        value: byDate.has(point.date) ? byDate.get(point.date) : null,
+      })),
+    };
+  });
+  const seriesList = [main, ...others];
+  const n = main.points.length;
+  const values = seriesList.flatMap((series) =>
+    series.points.map((point) => point.value).filter((value) => value != null && Number.isFinite(value))
+  );
+  if (!values.length) {
+    container.innerHTML = '<div class="chart-empty">No comparison data available.</div>';
+    return;
+  }
+
+  let minV = Math.min(...values, 0);
+  let maxV = Math.max(...values, 0);
+  const pad = Math.max((maxV - minV) * 0.12, 1);
+  minV -= pad;
+  maxV += pad;
+  const range = maxV - minV || 1;
+  const xPos = (i) => pL + (i / Math.max(n - 1, 1)) * (W - pL - pR);
+  const yPos = (value) => pT + innerH - ((value - minV) / range) * innerH;
+
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", H);
+  svg.style.display = "block";
+
+  [0, 0.5, 1].forEach((t) => {
+    const value = minV + t * range;
+    const y = yPos(value);
+    const line = document.createElementNS(NS, "line");
+    line.setAttribute("x1", pL); line.setAttribute("x2", W - pR);
+    line.setAttribute("y1", y); line.setAttribute("y2", y);
+    line.setAttribute("stroke", "#1F1F1F"); line.setAttribute("stroke-width", "1");
+    svg.appendChild(line);
+    const label = document.createElementNS(NS, "text");
+    label.setAttribute("x", pL - 5); label.setAttribute("y", y + 4);
+    label.setAttribute("text-anchor", "end");
+    label.setAttribute("fill", "#3A3734");
+    label.setAttribute("font-size", "10");
+    label.setAttribute("font-family", "JetBrains Mono, monospace");
+    label.textContent = `${value.toFixed(1)}%`;
+    svg.appendChild(label);
+  });
+
+  const zeroY = yPos(0);
+  const zero = document.createElementNS(NS, "line");
+  zero.setAttribute("x1", pL); zero.setAttribute("x2", W - pR);
+  zero.setAttribute("y1", zeroY); zero.setAttribute("y2", zeroY);
+  zero.setAttribute("stroke", "#303030"); zero.setAttribute("stroke-width", "1");
+  zero.setAttribute("stroke-dasharray", "4 3");
+  svg.appendChild(zero);
+
+  function drawSeries(series, width = 1.6) {
+    let d = "";
+    let drawing = false;
+    series.points.forEach((point, i) => {
+      if (point.value == null || !Number.isFinite(point.value)) {
+        drawing = false;
+        return;
+      }
+      d += `${drawing ? "L" : "M"}${xPos(i)},${yPos(point.value)}`;
+      drawing = true;
+    });
+    if (!d) return;
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", series.color);
+    path.setAttribute("stroke-width", width);
+    svg.appendChild(path);
+  }
+
+  seriesList.forEach((series, index) => drawSeries(series, index === 0 ? 1.8 : 1.4));
+
+  [0, Math.floor(n / 2), n - 1].forEach((i) => {
+    const lbl = document.createElementNS(NS, "text");
+    lbl.setAttribute("x", xPos(i));
+    lbl.setAttribute("y", H - pB + 16);
+    lbl.setAttribute("text-anchor", "middle");
+    lbl.setAttribute("fill", "#3A3734");
+    lbl.setAttribute("font-size", "10");
+    lbl.setAttribute("font-family", "JetBrains Mono, monospace");
+    lbl.textContent = main.points[i]?.date || "";
+    svg.appendChild(lbl);
+  });
+
+  seriesList.forEach((series, index) => {
+    const y = 18 + index * 18;
+    const swatch = document.createElementNS(NS, "rect");
+    swatch.setAttribute("x", W - pR + 14); swatch.setAttribute("y", y - 8);
+    swatch.setAttribute("width", 8); swatch.setAttribute("height", 8);
+    swatch.setAttribute("fill", series.color);
+    svg.appendChild(swatch);
+    const label = document.createElementNS(NS, "text");
+    label.setAttribute("x", W - pR + 28); label.setAttribute("y", y);
+    label.setAttribute("fill", "#888480");
+    label.setAttribute("font-size", "10");
+    label.setAttribute("font-family", "JetBrains Mono, monospace");
+    label.textContent = series.ticker;
+    svg.appendChild(label);
+  });
+
+  const crossV = document.createElementNS(NS, "line");
+  crossV.setAttribute("y1", pT); crossV.setAttribute("y2", H - pB);
+  crossV.setAttribute("stroke", "#303030"); crossV.setAttribute("stroke-width", "1");
+  crossV.setAttribute("stroke-dasharray", "3 3");
+  crossV.style.display = "none";
+  svg.appendChild(crossV);
+
+  const tooltip = document.createElementNS(NS, "g");
+  tooltip.style.display = "none";
+  const tooltipBg = document.createElementNS(NS, "rect");
+  tooltipBg.setAttribute("fill", "#181818");
+  tooltipBg.setAttribute("stroke", "#303030");
+  tooltipBg.setAttribute("stroke-width", "1");
+  tooltip.appendChild(tooltipBg);
+  const tooltipTxt = document.createElementNS(NS, "text");
+  tooltipTxt.setAttribute("font-size", "10");
+  tooltipTxt.setAttribute("font-family", "JetBrains Mono, monospace");
+  tooltipTxt.setAttribute("fill", "#EDEAE2");
+  tooltip.appendChild(tooltipTxt);
+  svg.appendChild(tooltip);
+
+  svg.addEventListener("mousemove", (event) => {
+    const rect = svg.getBoundingClientRect();
+    const mx = (event.clientX - rect.left) * (W / rect.width);
+    const rawI = ((mx - pL) / (W - pL - pR)) * (n - 1);
+    const i = Math.max(0, Math.min(n - 1, Math.round(rawI)));
+    const x = xPos(i);
+    crossV.setAttribute("x1", x); crossV.setAttribute("x2", x);
+    crossV.style.display = "";
+
+    const rows = [`${main.points[i]?.date || ""}`];
+    seriesList.forEach((series) => {
+      const value = series.points[i]?.value;
+      rows.push(`${series.ticker}: ${value == null ? "n/a" : `${value.toFixed(2)}%`}`);
+    });
+    tooltipTxt.innerHTML = "";
+    rows.forEach((text, rowIndex) => {
+      const tspan = document.createElementNS(NS, "tspan");
+      tspan.setAttribute("x", 0);
+      tspan.setAttribute("dy", rowIndex === 0 ? "0" : "13");
+      tspan.textContent = text;
+      tooltipTxt.appendChild(tspan);
+    });
+    const tw = Math.max(...rows.map((row) => row.length)) * 6.4 + 14;
+    const th = rows.length * 13 + 8;
+    const tx = Math.min(x + 8, W - pR - tw - 4);
+    tooltipBg.setAttribute("x", tx); tooltipBg.setAttribute("y", pT);
+    tooltipBg.setAttribute("width", tw); tooltipBg.setAttribute("height", th);
+    tooltipTxt.setAttribute("x", tx + 7); tooltipTxt.setAttribute("y", pT + 13);
+    tooltip.querySelectorAll("tspan").forEach((tspan) => tspan.setAttribute("x", tx + 7));
+    tooltip.style.display = "";
+  });
+
+  svg.addEventListener("mouseleave", () => {
+    crossV.style.display = "none";
+    tooltip.style.display = "none";
+  });
+
+  container.appendChild(svg);
 }
 
 function renderCandleChart(rows, container, activeOverlays = []) {
@@ -717,6 +1236,132 @@ function bindIndicatorChips() {
   });
 }
 
+function clearIndicators() {
+  state.indicators.clear();
+  $$(".ind-chip").forEach((chip) => chip.classList.remove("active"));
+}
+
+function renderCompareTiles() {
+  const bar = $("#compare-tile-bar");
+  const indicatorBar = $("#indicator-bar");
+  if (!bar || !indicatorBar) return;
+  const comparing = state.compareTickers.length > 0;
+  bar.classList.toggle("hidden", !comparing);
+  indicatorBar.classList.toggle("hidden", comparing);
+
+  bar.innerHTML = state.compareTickers.map((item) => `
+    <div class="compare-tile" style="--compare-color: ${item.color}">
+      <span>${escapeHtml(item.ticker)}</span>
+      <button type="button" data-compare-remove="${escapeHtml(item.ticker)}" aria-label="Remove ${escapeHtml(item.ticker)}">×</button>
+    </div>
+  `).join("");
+  $$("[data-compare-remove]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      removeCompareTicker(btn.dataset.compareRemove);
+    });
+  });
+}
+
+function addCompareTicker(ticker, name) {
+  const symbol = ticker.trim().toUpperCase();
+  if (!symbol || symbol === state.ticker) return;
+  if (state.compareTickers.some((item) => item.ticker === symbol)) return;
+  const color = COMPARE_COLORS[state.compareTickers.length % COMPARE_COLORS.length];
+  state.compareTickers.push({ ticker: symbol, name: name || symbol, color });
+  clearIndicators();
+  closeCompareModal();
+  renderCompareTiles();
+  runTickerChart();
+}
+
+function removeCompareTicker(ticker) {
+  state.compareTickers = state.compareTickers.filter((item) => item.ticker !== ticker);
+  renderCompareTiles();
+  runTickerChart();
+}
+
+function openCompareModal() {
+  $("#compare-modal").classList.remove("hidden");
+  $("#compare-search-input").value = "";
+  $("#compare-search-dropdown").innerHTML = "";
+  $("#compare-search-dropdown").classList.remove("open");
+  $("#compare-search-input").focus();
+}
+
+function closeCompareModal() {
+  $("#compare-modal").classList.add("hidden");
+}
+
+function bindCompareControls() {
+  $("#chart-compare-btn").addEventListener("click", openCompareModal);
+  $("#compare-modal-close").addEventListener("click", closeCompareModal);
+  $("#compare-modal").addEventListener("click", (event) => {
+    if (event.target.id === "compare-modal") closeCompareModal();
+  });
+
+  const input = $("#compare-search-input");
+  const dropdown = $("#compare-search-dropdown");
+  let debounceTimer = null;
+
+  function renderResults(results) {
+    dropdown.innerHTML = "";
+    if (!results.length) {
+      dropdown.innerHTML = `<li class="search-empty">No matches</li>`;
+      dropdown.classList.add("open");
+      return;
+    }
+    results
+      .filter((item) => item.ticker !== state.ticker)
+      .filter((item) => !state.compareTickers.some((compare) => compare.ticker === item.ticker))
+      .forEach((item) => {
+        const li = document.createElement("li");
+        li.className = "search-item";
+        li.innerHTML = `
+          <span class="search-item-ticker">${escapeHtml(item.ticker)}</span>
+          <span class="search-item-name">${escapeHtml(item.name || "")}</span>
+        `;
+        li.addEventListener("mousedown", (event) => {
+          event.preventDefault();
+          addCompareTicker(item.ticker, item.name);
+        });
+        dropdown.appendChild(li);
+      });
+    dropdown.classList.toggle("open", dropdown.children.length > 0);
+  }
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim();
+    clearTimeout(debounceTimer);
+    if (q.length < 1) {
+      dropdown.classList.remove("open");
+      dropdown.innerHTML = "";
+      return;
+    }
+    debounceTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+        renderResults(await res.json());
+      } catch {
+        dropdown.innerHTML = `<li class="search-empty">Search failed</li>`;
+        dropdown.classList.add("open");
+      }
+    }, 150);
+  });
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeCompareModal();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const first = dropdown.querySelector(".search-item");
+      if (!first) return;
+      addCompareTicker(
+        first.querySelector(".search-item-ticker").textContent,
+        first.querySelector(".search-item-name").textContent
+      );
+    }
+  });
+}
+
 // Financials tab
 async function runTickerFinancials() {
   const ticker = state.ticker;
@@ -725,7 +1370,7 @@ async function runTickerFinancials() {
   const quarterly = $("#ticker-period").value === "true";
   const pivot = $("#ticker-pivot").value === "true";
   try {
-    const data = await post("/api/single", {
+    const data = await post("/api/ticker-financials", {
       ticker,
       view: state.tickerView,
       quarterly,
@@ -841,12 +1486,6 @@ function bindTickerPage() {
       if (state.route === "ticker" && state.tickerMainTab === "financials")
         runTickerFinancials();
     });
-  });
-
-  $("#btn-ticker-single").addEventListener("click", () => {
-    if (!state.ticker) return;
-    $("#single-form").elements.ticker.value = state.ticker;
-    setRoute("single");
   });
 }
 
@@ -1028,7 +1667,8 @@ function renderTable(data) {
     const tr = document.createElement("tr");
     columns.forEach((column) => {
       const td = document.createElement("td");
-      td.textContent = formatValue(row[column]);
+      td.textContent = formatTableCell(column, row[column]);
+      applyDirectionalCellClass(td, column, row[column]);
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -1037,6 +1677,47 @@ function renderTable(data) {
   table.append(thead, tbody);
   $("#result-meta").textContent = `${data.height} rows · ${data.width} columns`;
   setStatus("Done.", false);
+}
+
+function formatTableCell(column, value) {
+  if (String(column).trim().toLowerCase() === "symbol") {
+    return cleanMarketSymbol(value);
+  }
+  if (String(column).trim().toLowerCase() === "price") {
+    return stripInlinePriceChange(value);
+  }
+  return formatValue(value);
+}
+
+function cleanMarketSymbol(value) {
+  const formatted = formatValue(value).trim();
+  const parts = formatted.split(/\s+/);
+  if (parts.length >= 2 && parts[0].length === 1) return parts[1];
+  return parts[0] || "";
+}
+
+function stripInlinePriceChange(value) {
+  const formatted = formatValue(value);
+  const match = formatted.match(/^\s*([+-]?\d[\d,]*(?:\.\d+)?)/);
+  return match ? match[1] : formatted;
+}
+
+function applyDirectionalCellClass(td, column, value) {
+  if (!isDirectionalColumn(column)) return;
+  const numeric = parseSignedNumber(value);
+  if (numeric === null || numeric === 0) return;
+  td.classList.add(numeric > 0 ? "value-positive" : "value-negative");
+}
+
+function isDirectionalColumn(column) {
+  return /^change\b/i.test(String(column).trim());
+}
+
+function parseSignedNumber(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (value === null || value === undefined) return null;
+  const match = String(value).replace(/,/g, "").match(/[+-]?\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : null;
 }
 
 function formatValue(value) {
@@ -1249,23 +1930,6 @@ async function loadOptions() {
 }
 
 function bindForms() {
-  $("#single-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    try {
-      const data = await post("/api/single", {
-        ticker: formValue(form, "ticker"),
-        view: formValue(form, "view"),
-        quarterly: formValue(form, "quarterly") === "true",
-        pivot: formValue(form, "pivot") === "true",
-      });
-      $("#result-title").textContent = data.title;
-      renderTable(data.data);
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
-
   $("#multi-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1374,7 +2038,6 @@ function bindForms() {
   $$("[data-example]").forEach((button) => {
     button.addEventListener("click", () => {
       const example = button.dataset.example;
-      if (example === "single") $("#single-form").requestSubmit();
       if (example === "multi") $("#multi-form").requestSubmit();
       if (example === "dcf") {
         $("#dcf-form").elements.tickers.value = "AAPL, MSFT, GOOGL";
@@ -1385,13 +2048,33 @@ function bindForms() {
   });
 }
 
+function bindMarkets() {
+  $$(".markets-tab").forEach((btn) => {
+    btn.addEventListener("click", () => runMarkets(btn.dataset.marketsSub));
+  });
+}
+
+function openDashboardMarket(sub) {
+  setRoute("markets");
+  runMarkets(sub);
+}
+
+function bindDashboard() {
+  $$("[data-dashboard-market]").forEach((card) => {
+    card.addEventListener("click", () => openDashboardMarket(card.dataset.dashboardMarket));
+  });
+}
+
 function bindNavigation() {
   $$("[data-route]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       setRoute(link.dataset.route);
+      if (link.dataset.route === "dashboard") runDashboard();
+      if (link.dataset.route === "markets") runMarkets(state.marketsSub || "most_active");
     });
   });
+  $("#page-back-btn").addEventListener("click", goBackFromTicker);
 }
 
 function appendLlmMessage(role, content, streaming = false) {
@@ -1591,10 +2274,14 @@ loadOptions().then(() => {
   loadWatchlists();
   bindNavigation();
   bindForms();
+  bindDashboard();
+  bindMarkets();
   bindTickerPage();
   bindIndicatorChips();
+  bindCompareControls();
   bindLlmSidebar();
   initSearch();
+  initMarketStatus();
   renderWatchlists();
 
   const route = routeFromPath();
@@ -1609,17 +2296,21 @@ loadOptions().then(() => {
       setRoute("ticker", true);
       runTickerChart();
     } else {
-      setRoute("single", true);
+      setRoute("dashboard", true);
+      runDashboard();
     }
   } else {
     setRoute(route, true);
+    if (route === "dashboard") runDashboard();
+    if (route === "markets") runMarkets("most_active");
   }
 
-  window.addEventListener("popstate", () => {
+  window.addEventListener("popstate", (event) => {
     const r = routeFromPath();
     if (r === "ticker") {
       const ticker = tickerFromPath();
       if (ticker) {
+        state.tickerBackPath = event.state?.tickerBackPath || null;
         state.ticker = ticker;
         $("#ticker-eyebrow").textContent = ticker;
         $("#ticker-heading").textContent = ticker;
@@ -1631,6 +2322,8 @@ loadOptions().then(() => {
       }
     } else {
       setRoute(r, true);
+      if (r === "dashboard") runDashboard();
+      if (r === "markets") runMarkets(state.marketsSub || "most_active");
     }
   });
 });
