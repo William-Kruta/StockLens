@@ -64,7 +64,11 @@ def _stream_claude(payload: dict):
         "https://api.anthropic.com/v1/messages",
         headers=headers, json=body, stream=True, timeout=60,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except _req.HTTPError as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        return
     event_type = None
     for raw_line in resp.iter_lines(decode_unicode=True):
         if raw_line.startswith("event:"):
@@ -99,7 +103,11 @@ def _stream_openai(payload: dict):
         "https://api.openai.com/v1/chat/completions",
         headers=headers, json=body, stream=True, timeout=60,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except _req.HTTPError as exc:
+        yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+        return
     for raw_line in resp.iter_lines(decode_unicode=True):
         if raw_line.startswith("data:"):
             yield raw_line + "\n\n"
