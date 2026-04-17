@@ -465,6 +465,101 @@ function closeChatProviderDropdown() {
   $("#chat-provider-dropdown")?.classList.add("hidden");
 }
 
+function bindChat() {
+  function newConv() {
+    const conv = createConversation(defaultChatProvider());
+    openConversation(conv.id);
+    renderChatSidebar();
+  }
+
+  $("#chat-new-btn")?.addEventListener("click", newConv);
+  $("#chat-empty-new")?.addEventListener("click", newConv);
+  $("#chat-send")?.addEventListener("click", sendChatMessage);
+
+  $("#chat-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+
+  $("#chat-input")?.addEventListener("input", () => {
+    const ta = $("#chat-input");
+    ta.style.height = "38px";
+    ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`;
+  });
+
+  $("#chat-provider-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const dropdown = $("#chat-provider-dropdown");
+    if (dropdown?.classList.contains("hidden")) {
+      openChatProviderDropdown();
+    } else {
+      closeChatProviderDropdown();
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".chat-provider-wrap")) closeChatProviderDropdown();
+  });
+
+  $("#chat-settings-btn")?.addEventListener("click", () => {
+    state.chatSettingsOpen = !state.chatSettingsOpen;
+    const panel = $("#chat-settings-panel");
+    panel?.classList.toggle("hidden", !state.chatSettingsOpen);
+    panel?.setAttribute("aria-expanded", String(state.chatSettingsOpen));
+    $("#chat-settings-btn")?.setAttribute("aria-expanded", String(state.chatSettingsOpen));
+    if (state.chatSettingsOpen) {
+      const s = loadChatSettings();
+      const llamaUrl = $("#chat-llama-url");
+      const claudeModel = $("#chat-claude-model");
+      const openaiModel = $("#chat-openai-model");
+      if (llamaUrl) llamaUrl.value = loadLlmSettings().serverUrl;
+      if (claudeModel) claudeModel.value = s.claudeModel || "claude-sonnet-4-6";
+      if (openaiModel) openaiModel.value = s.openaiModel || "gpt-4o";
+    }
+  });
+
+  $("#chat-settings-save")?.addEventListener("click", () => {
+    const url = $("#chat-llama-url")?.value.trim();
+    if (url) saveLlmSettings(url);
+    saveChatSettings({
+      claudeModel: $("#chat-claude-model")?.value || "claude-sonnet-4-6",
+      openaiModel: $("#chat-openai-model")?.value || "gpt-4o",
+    });
+    state.chatProviders.llama = !!loadLlmSettings().serverUrl;
+    state.chatSettingsOpen = false;
+    const panel = $("#chat-settings-panel");
+    panel?.classList.add("hidden");
+    $("#chat-settings-btn")?.setAttribute("aria-expanded", "false");
+  });
+}
+
+async function initChat() {
+  state.chatConversations = loadChatConversations();
+  try {
+    const data = await fetch("/api/chat/providers").then((r) => r.json());
+    state.chatProviders = {
+      llama: !!loadLlmSettings().serverUrl,
+      claude: !!data.claude,
+      openai: !!data.openai,
+    };
+  } catch {
+    state.chatProviders = {
+      llama: !!loadLlmSettings().serverUrl,
+      claude: false,
+      openai: false,
+    };
+  }
+  renderChatSidebar();
+  if (state.chatConversations.length) {
+    openConversation(state.chatConversations[0].id);
+  } else {
+    renderChatMessages();
+    renderChatToolbar();
+  }
+}
+
 async function testLlmConnection(url) {
   const res = await fetch(`${url.replace(/\/$/, "")}/v1/models`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -604,7 +699,7 @@ function routeFromPath() {
   const path = location.pathname;
   if (path.startsWith("/ticker/")) return "ticker";
   const route = path.replace("/", "") || "single";
-  return ["single", "multi", "watchlist", "screener", "dcf"].includes(route) ? route : "single";
+  return ["single", "chat", "multi", "watchlist", "screener", "dcf"].includes(route) ? route : "single";
 }
 
 function tickerFromPath() {
@@ -1811,6 +1906,7 @@ function bindNavigation() {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       setRoute(link.dataset.route);
+      if (link.dataset.route === "chat") initChat();
     });
   });
 }
@@ -2015,6 +2111,7 @@ loadOptions().then(() => {
   bindTickerPage();
   bindIndicatorChips();
   bindLlmSidebar();
+  bindChat();
   initSearch();
   renderWatchlists();
 
@@ -2034,6 +2131,7 @@ loadOptions().then(() => {
     }
   } else {
     setRoute(route, true);
+    if (route === "chat") initChat();
   }
 
   window.addEventListener("popstate", () => {
@@ -2052,6 +2150,7 @@ loadOptions().then(() => {
       }
     } else {
       setRoute(r, true);
+      if (r === "chat") initChat();
     }
   });
 });
