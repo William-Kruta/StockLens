@@ -1,0 +1,13 @@
+# Data
+polars
+pandas
+pyarrow
+yfinance
+yahoors
+# Web
+requests
+beautifulsoup4
+lxml
+ddgs
+# Helpers 
+tqdm

@@ -42,6 +42,15 @@ PAGE_ROUTES = {
 }
 
 
+def _web_search(query: str, max_results: int = 5) -> list:
+    from ddgs import DDGS
+    with DDGS() as ddgs:
+        return [
+            {"title": r.get("title", ""), "snippet": r.get("body", ""), "url": r.get("href", "")}
+            for r in ddgs.text(query, max_results=max_results)
+        ]
+
+
 def _chat_providers() -> dict:
     return {
         "claude": bool(os.environ.get("SECRS_CLAUDE_API_KEY")),
@@ -1239,6 +1248,16 @@ class UIHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/chat/providers":
             self._send_json(_chat_providers())
+            return
+        if path == "/api/search":
+            q = parse_qs(parsed.query).get("q", [""])[0].strip()
+            if not q:
+                self._send_json({"error": "Missing query"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                self._send_json(_web_search(q))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
         if path == "/api/dashboard-indexes":
             try:

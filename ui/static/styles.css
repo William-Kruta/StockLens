@@ -2177,3 +2177,47 @@ main:has(#chat-page.active) {
   opacity: 0.4;
   cursor: default;
 }
+
+/* ── Web search toggle ──────────────────────────── */
+.web-search-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--text-3);
+  font-size: 0.9rem;
+  height: 38px;
+  width: 38px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.web-search-toggle:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-2);
+  background: none;
+  box-shadow: none;
+}
+
+.web-search-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: none;
+  box-shadow: none;
+}
+
+.web-search-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Match llm sidebar button height (34px) */
+#llm-web-toggle {
+  height: 34px;
+  width: 34px;
+  border-radius: 6px;
+}

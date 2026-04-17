@@ -25,6 +25,8 @@ const state = {
   chatStreaming: false,
   chatProviders: { llama: false, claude: false, openai: false },
   chatSettingsOpen: false,
+  llmWebSearch: false,
+  chatWebSearch: false,
 };
 
 // Color + group metadata for each indicator key
@@ -68,6 +70,21 @@ const CHAT_MODELS = {
   claude: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
   openai: ["gpt-4o", "gpt-4o-mini"],
 };
+
+async function fetchWebContext(query) {
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&max=5`);
+    if (!res.ok) return null;
+    const results = await res.json();
+    if (!Array.isArray(results) || !results.length) return null;
+    const lines = results.map((r, i) =>
+      `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.url}`
+    );
+    return `[Web search results for: "${query}"]\n\n${lines.join("\n\n")}`;
+  } catch {
+    return null;
+  }
+}
 
 function loadChatConversations() {
   try {
@@ -221,9 +238,13 @@ function renderChatMessages() {
     });
     if (inputEl) inputEl.disabled = true;
     if (sendEl) sendEl.disabled = true;
+    const webToggle = $("#chat-web-toggle");
+    if (webToggle) webToggle.disabled = true;
     return;
   }
   area.innerHTML = "";
+  const webToggle = $("#chat-web-toggle");
+  if (webToggle) webToggle.disabled = false;
   conv.messages.forEach((msg) =>
     appendChatMessage(msg.role, msg.content, false, msg.provider)
   );
@@ -354,6 +375,13 @@ async function sendChatMessage() {
   const apiMessages = conv.messages
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => ({ role: m.role, content: m.content }));
+
+  if (state.chatWebSearch) {
+    const webCtx = await fetchWebContext(text);
+    if (webCtx && apiMessages.length) {
+      apiMessages[apiMessages.length - 1] = { role: "user", content: `${webCtx}\n\n---\n\n${text}` };
+    }
+  }
 
   try {
     const { content, error } = await streamChatResponse(apiMessages, provider, model, bubble);
@@ -488,6 +516,13 @@ function bindChat() {
 
   $("#chat-new-btn")?.addEventListener("click", newConv);
   $("#chat-send")?.addEventListener("click", sendChatMessage);
+
+  $("#chat-web-toggle")?.addEventListener("click", () => {
+    state.chatWebSearch = !state.chatWebSearch;
+    const btn = $("#chat-web-toggle");
+    btn.classList.toggle("active", state.chatWebSearch);
+    btn.setAttribute("aria-pressed", String(state.chatWebSearch));
+  });
 
   $("#chat-input")?.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -2700,7 +2735,14 @@ async function sendLlmMessage() {
   }
 
   const systemMsg = { role: "system", content: buildSystemPrompt() };
-  const messages = [systemMsg, ...state.llmHistory];
+  let apiHistory = state.llmHistory;
+  if (state.llmWebSearch) {
+    const webCtx = await fetchWebContext(userText);
+    if (webCtx) {
+      apiHistory = [...state.llmHistory.slice(0, -1), { role: "user", content: `${webCtx}\n\n---\n\n${userText}` }];
+    }
+  }
+  const messages = [systemMsg, ...apiHistory];
 
   try {
     const reply = await streamLlmResponse(messages);
@@ -2771,6 +2813,14 @@ function bindLlmSidebar() {
 
   // Send button
   $("#llm-send").addEventListener("click", sendLlmMessage);
+
+  // Web search toggle
+  $("#llm-web-toggle")?.addEventListener("click", () => {
+    state.llmWebSearch = !state.llmWebSearch;
+    const btn = $("#llm-web-toggle");
+    btn.classList.toggle("active", state.llmWebSearch);
+    btn.setAttribute("aria-pressed", String(state.llmWebSearch));
+  });
 
   // Enter sends, Shift+Enter inserts newline
   $("#llm-textarea").addEventListener("keydown", (e) => {
