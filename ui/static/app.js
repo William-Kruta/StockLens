@@ -254,6 +254,134 @@ function openConversation(id) {
   $("#chat-input")?.focus();
 }
 
+async function streamChatResponse(messages, provider, model, bubbleEl) {
+  let url, bodyObj;
+  const headers = { "content-type": "application/json" };
+
+  if (provider === "llama") {
+    const { serverUrl } = loadLlmSettings();
+    url = `${serverUrl.replace(/\/$/, "")}/v1/chat/completions`;
+    bodyObj = { model: "local", messages, stream: true };
+  } else {
+    url = `/api/chat/${provider}`;
+    bodyObj = { messages, model, stream: true };
+  }
+
+  let res;
+  try {
+    res = await fetch(url, { method: "POST", headers, body: JSON.stringify(bodyObj) });
+  } catch (err) {
+    return { content: "", error: "Could not reach server. Check settings." };
+  }
+
+  if (!res.ok) {
+    res.body.cancel();
+    let errMsg = `HTTP ${res.status}`;
+    try { const d = await res.json(); errMsg = d.error || errMsg; } catch {}
+    return { content: "", error: errMsg };
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let content = "";
+
+  outer: while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (raw === "[DONE]") break outer;
+      try {
+        const obj = JSON.parse(raw);
+        const token = obj.choices?.[0]?.delta?.content;
+        if (token) {
+          content += token;
+          const cursor = bubbleEl.querySelector(".llm-cursor");
+          if (cursor) cursor.remove();
+          bubbleEl.textContent = content;
+          const newCursor = document.createElement("span");
+          newCursor.className = "llm-cursor";
+          bubbleEl.appendChild(newCursor);
+          bubbleEl.closest("#chat-messages")?.scrollTo(0, 999999);
+        }
+      } catch {}
+    }
+  }
+
+  reader.cancel();
+  const cursor = bubbleEl.querySelector(".llm-cursor");
+  if (cursor) cursor.remove();
+  bubbleEl.textContent = content;
+  return { content, error: null };
+}
+
+async function sendChatMessage() {
+  const input = $("#chat-input");
+  const text = input?.value.trim();
+  const conv = getActiveConversation();
+  if (!text || !conv || state.chatStreaming) return;
+
+  state.chatStreaming = true;
+  input.value = "";
+  input.style.height = "38px";
+  $("#chat-send")?.setAttribute("disabled", "");
+
+  const isFirstAssistant = !conv.messages.some((m) => m.role === "assistant");
+  const userMsg = { role: "user", content: text, timestamp: Date.now() };
+  conv.messages.push(userMsg);
+  updateConversation(conv.id, {});
+  appendChatMessage("user", text);
+
+  const { provider, model } = conv;
+  const bubble = appendChatMessage("assistant", "", true, provider);
+  const apiMessages = conv.messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({ role: m.role, content: m.content }));
+
+  const { content, error } = await streamChatResponse(apiMessages, provider, model, bubble);
+
+  if (error) {
+    bubble.closest(".chat-msg")?.remove();
+    appendChatMessage("error", `⚠ ${error}`);
+  } else if (content) {
+    const assistantMsg = { role: "assistant", content, provider, model, timestamp: Date.now() };
+    conv.messages.push(assistantMsg);
+    updateConversation(conv.id, {});
+    if (isFirstAssistant) generateChatTitle(conv.id, text, provider, model);
+  }
+
+  state.chatStreaming = false;
+  const sendBtn = $("#chat-send");
+  if (sendBtn) sendBtn.disabled = false;
+  input.focus();
+}
+
+async function generateChatTitle(convId, firstMessage, provider, model) {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You generate conversation titles. Reply with ONLY the title — 5 words or fewer, no punctuation at the end.",
+    },
+    { role: "user", content: firstMessage },
+  ];
+  const dummyBubble = document.createElement("div");
+  try {
+    const { content } = await streamChatResponse(messages, provider, model, dummyBubble);
+    const title = content.trim().slice(0, 60);
+    if (title) {
+      updateConversation(convId, { title });
+      renderChatSidebar();
+      if (state.chatActiveId === convId) renderChatToolbar();
+    }
+  } catch {}
+}
+
 async function testLlmConnection(url) {
   const res = await fetch(`${url.replace(/\/$/, "")}/v1/models`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
