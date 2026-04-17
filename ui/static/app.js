@@ -1473,6 +1473,7 @@ async function streamLlmResponse(messages) {
     }
   }
 
+  reader.cancel();
   const cursor = bubble.querySelector(".llm-cursor");
   if (cursor) cursor.remove();
   bubble.textContent = content;
