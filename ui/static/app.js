@@ -1394,6 +1394,128 @@ function bindNavigation() {
   });
 }
 
+function appendLlmMessage(role, content, streaming = false) {
+  const msgs = $("#llm-messages");
+  const div = document.createElement("div");
+  div.className = `llm-msg ${role}`;
+  const roleEl = document.createElement("span");
+  roleEl.className = "llm-msg-role";
+  roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : "LLM";
+  const bubble = document.createElement("div");
+  bubble.className = "llm-msg-bubble";
+  bubble.textContent = content;
+  if (streaming) {
+    const cursor = document.createElement("span");
+    cursor.className = "llm-cursor";
+    bubble.appendChild(cursor);
+  }
+  div.appendChild(roleEl);
+  div.appendChild(bubble);
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return bubble;
+}
+
+async function streamLlmResponse(messages) {
+  const { serverUrl } = loadLlmSettings();
+  const url = `${serverUrl.replace(/\/$/, "")}/v1/chat/completions`;
+  const bubble = appendLlmMessage("assistant", "", true);
+  let content = "";
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "local", messages, stream: true }),
+    });
+  } catch (err) {
+    bubble.parentElement.remove();
+    appendLlmMessage("error", `⚠ Could not reach LLM server. Check Settings.`);
+    return "";
+  }
+
+  if (!res.ok) {
+    bubble.parentElement.remove();
+    appendLlmMessage("error", `⚠ LLM server returned HTTP ${res.status}. Check Settings.`);
+    return "";
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (raw === "[DONE]") break;
+      try {
+        const obj = JSON.parse(raw);
+        const token = obj.choices?.[0]?.delta?.content;
+        if (token) {
+          content += token;
+          const cursor = bubble.querySelector(".llm-cursor");
+          if (cursor) cursor.remove();
+          bubble.textContent = content;
+          const newCursor = document.createElement("span");
+          newCursor.className = "llm-cursor";
+          bubble.appendChild(newCursor);
+          $("#llm-messages").scrollTop = $("#llm-messages").scrollHeight;
+        }
+      } catch {}
+    }
+  }
+
+  const cursor = bubble.querySelector(".llm-cursor");
+  if (cursor) cursor.remove();
+  bubble.textContent = content;
+  $("#llm-messages").scrollTop = $("#llm-messages").scrollHeight;
+  return content;
+}
+
+async function sendLlmMessage() {
+  const textarea = $("#llm-textarea");
+  const userText = textarea.value.trim();
+  if (!userText || state.llmStreaming) return;
+
+  state.llmStreaming = true;
+  textarea.value = "";
+  textarea.style.height = "34px";
+  $("#llm-send").disabled = true;
+
+  state.llmHistory.push({ role: "user", content: userText });
+  appendLlmMessage("user", userText);
+
+  if (state.llmHistory.length > LLM_HISTORY_MAX) {
+    state.llmHistory = state.llmHistory.slice(-LLM_HISTORY_MAX);
+  }
+
+  const systemMsg = { role: "system", content: buildSystemPrompt() };
+  const messages = [systemMsg, ...state.llmHistory];
+
+  try {
+    const reply = await streamLlmResponse(messages);
+    if (reply) {
+      state.llmHistory.push({ role: "assistant", content: reply });
+      if (state.llmHistory.length > LLM_HISTORY_MAX) {
+        state.llmHistory = state.llmHistory.slice(-LLM_HISTORY_MAX);
+      }
+    }
+  } catch (err) {
+    appendLlmMessage("error", `⚠ ${err.message}`);
+  } finally {
+    state.llmStreaming = false;
+    $("#llm-send").disabled = false;
+    textarea.focus();
+  }
+}
+
 function bindLlmSidebar() {
   // Populate settings input from localStorage on load
   $("#llm-server-url").value = loadLlmSettings().serverUrl;
@@ -1442,6 +1564,24 @@ function bindLlmSidebar() {
       status.textContent = `✕ Unreachable — ${err.message}`;
       status.className = "llm-conn-status error";
     }
+  });
+
+  // Send button
+  $("#llm-send").addEventListener("click", sendLlmMessage);
+
+  // Enter sends, Shift+Enter inserts newline
+  $("#llm-textarea").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendLlmMessage();
+    }
+  });
+
+  // Auto-resize textarea as user types
+  $("#llm-textarea").addEventListener("input", () => {
+    const ta = $("#llm-textarea");
+    ta.style.height = "34px";
+    ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
   });
 }
 
