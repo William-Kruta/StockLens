@@ -71,8 +71,109 @@ function showLlmView(view) {
   $(`#llm-${view}-view`).classList.add("active");
 }
 
+function getLlmTableRows(limit = 20) {
+  const table = $("#result-table");
+  if (!table || !table.rows.length) return null;
+  const headers = Array.from(table.querySelectorAll("thead th")).map((th) => th.textContent);
+  const rows = Array.from(table.querySelectorAll("tbody tr"))
+    .slice(0, limit)
+    .map((tr) =>
+      Object.fromEntries(
+        Array.from(tr.querySelectorAll("td")).map((td, i) => [headers[i] || i, td.textContent])
+      )
+    );
+  return rows.length ? rows : null;
+}
+
+function buildLlmContext() {
+  const route = state.route;
+
+  if (route === "ticker") {
+    const ticker = state.ticker || "—";
+    const tab = state.tickerMainTab;
+
+    if (tab === "chart") {
+      const inds = [...state.indicators].join(", ") || "none";
+      return {
+        description: `${ticker} chart — period: ${state.chartPeriod}, interval: ${state.chartInterval}, indicators: ${inds}`,
+        data: null,
+      };
+    }
+    if (tab === "financials") {
+      const view = state.tickerView || "statement";
+      const period = $("#ticker-period")?.value === "true" ? "quarterly" : "annual";
+      return {
+        description: `${ticker} ${view.replace(/_/g, " ")} (${period})`,
+        data: getLlmTableRows(20),
+      };
+    }
+    if (tab === "info") {
+      const card = $("#ticker-info-body");
+      const text = card ? card.innerText.slice(0, 800).trim() : "";
+      return {
+        description: `${ticker} company info`,
+        data: text || null,
+      };
+    }
+  }
+
+  if (route === "single") {
+    const ticker = ($("#single-form")?.elements?.ticker?.value || "").toUpperCase();
+    const view = $("#single-form")?.elements?.view?.value || "statement";
+    return {
+      description: `${ticker} ${view.replace(/_/g, " ")}`,
+      data: getLlmTableRows(20),
+    };
+  }
+
+  if (route === "multi") {
+    const tickers = ($("#multi-form")?.elements?.tickers?.value || "").replace(/\n/g, ", ");
+    const analysis = $("#multi-form")?.elements?.analysis?.value || "analysis";
+    return {
+      description: `Multi-ticker ${analysis}: ${tickers}`,
+      data: getLlmTableRows(20),
+    };
+  }
+
+  if (route === "screener") {
+    return {
+      description: "Screener results",
+      data: getLlmTableRows(20),
+    };
+  }
+
+  if (route === "dcf") {
+    const tickers = ($("#dcf-form")?.elements?.tickers?.value || "").replace(/\n/g, ", ");
+    return {
+      description: `DCF valuation: ${tickers}`,
+      data: getLlmTableRows(10),
+    };
+  }
+
+  return { description: `${route} page`, data: null };
+}
+
+function buildSystemPrompt() {
+  const ctx = buildLlmContext();
+  let prompt = `You are a financial analysis assistant embedded in secrs, a SEC EDGAR filings tool.\nThe user is currently viewing: ${ctx.description}.`;
+  if (ctx.data) {
+    if (typeof ctx.data === "string") {
+      prompt += `\n\nContext:\n${ctx.data}`;
+    } else if (Array.isArray(ctx.data) && ctx.data.length) {
+      prompt += `\n\nVisible data (up to ${ctx.data.length} rows):\n${JSON.stringify(ctx.data)}`;
+    }
+  }
+  prompt += `\n\nAnswer concisely. If asked about data not shown, say so.`;
+  return prompt;
+}
+
 function updateLlmContextBar() {
-  // stub — replaced in Task 4
+  const ctx = buildLlmContext();
+  const text = $("#llm-ctx-text");
+  const dot = $("#llm-ctx-dot");
+  if (!text || !dot) return;
+  text.textContent = `Context: ${ctx.description}`;
+  dot.classList.toggle("inactive", !ctx.description || ctx.description.includes("—"));
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -98,6 +199,7 @@ function setRoute(route, replace = false) {
     link.classList.toggle("active", link.dataset.route === route);
   });
   if (!replace && route !== "ticker") history.pushState({}, "", `/${route}`);
+  if (state.llmOpen) updateLlmContextBar();
 }
 
 // ── Ticker landing page ────────────────────────────────────
@@ -114,6 +216,7 @@ function openTickerPage(ticker, name) {
   history.pushState({}, "", `/ticker/${ticker}`);
   setRoute("ticker", true);
   runTickerChart();
+  if (state.llmOpen) updateLlmContextBar();
 }
 
 function setTickerMainTab(tab) {
@@ -126,6 +229,7 @@ function setTickerMainTab(tab) {
 
   // Show results table only for financials tab
   $(".results").classList.toggle("hidden", tab !== "financials");
+  if (state.llmOpen) updateLlmContextBar();
 }
 
 // Chart tab
