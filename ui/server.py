@@ -54,12 +54,18 @@ def _stream_claude(payload: dict):
     api_key = os.environ.get("SECRS_CLAUDE_API_KEY", "")
     model = payload.get("model", "claude-sonnet-4-6")
     messages = payload.get("messages", [])
+    system_text = None
+    if messages and messages[0].get("role") == "system":
+        system_text = messages[0]["content"]
+        messages = messages[1:]
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
     }
     body = {"model": model, "max_tokens": 4096, "messages": messages, "stream": True}
+    if system_text:
+        body["system"] = system_text
     resp = _req.post(
         "https://api.anthropic.com/v1/messages",
         headers=headers, json=body, stream=True, timeout=60,
@@ -1282,8 +1288,8 @@ class UIHandler(BaseHTTPRequestHandler):
             try:
                 gen = _stream_claude(payload) if provider == "claude" else _stream_openai(payload)
                 self._send_sse_stream(gen)
-            except Exception:
-                pass  # Client disconnected or upstream error
+            except Exception as exc:
+                print(f"[chat] stream error: {exc}", flush=True)
             return
         handler = API_HANDLERS.get(path)
         if handler is None:
