@@ -14,6 +14,11 @@ const state = {
   llmOpen: false,
   llmHistory: [],    // [{role, content}] persists across navigation
   llmStreaming: false,
+  chatConversations: [],
+  chatActiveId: null,
+  chatStreaming: false,
+  chatProviders: { llama: false, claude: false, openai: false },
+  chatSettingsOpen: false,
 };
 
 // Color + group metadata for each indicator key
@@ -42,6 +47,90 @@ function loadLlmSettings() {
 
 function saveLlmSettings(url) {
   localStorage.setItem(LLM_URL_KEY, url.trim().replace(/\/$/, ""));
+}
+
+function loadChatConversations() {
+  try {
+    return JSON.parse(localStorage.getItem(CHAT_STORAGE_KEY) || "[]");
+  } catch { return []; }
+}
+
+function saveChatConversations(convs) {
+  try {
+    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(convs));
+  } catch (err) {
+    setStatus("Chat storage full — delete some conversations.", true);
+  }
+}
+
+function loadChatSettings() {
+  try {
+    return JSON.parse(localStorage.getItem(CHAT_SETTINGS_KEY) || "{}");
+  } catch { return {}; }
+}
+
+function saveChatSettings(settings) {
+  const current = loadChatSettings();
+  localStorage.setItem(CHAT_SETTINGS_KEY, JSON.stringify({ ...current, ...settings }));
+}
+
+const CHAT_STORAGE_KEY = "secrs.chat.conversations";
+const CHAT_SETTINGS_KEY = "secrs.chat.settings";
+const CHAT_MODELS = {
+  claude: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
+  openai: ["gpt-4o", "gpt-4o-mini"],
+};
+
+function createConversation(provider = "claude") {
+  const settings = loadChatSettings();
+  const model = provider === "claude"
+    ? (settings.claudeModel || "claude-sonnet-4-6")
+    : provider === "openai"
+    ? (settings.openaiModel || "gpt-4o")
+    : null;
+  const conv = {
+    id: crypto.randomUUID(),
+    title: "New conversation",
+    provider,
+    model,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    messages: [],
+  };
+  state.chatConversations.unshift(conv);
+  saveChatConversations(state.chatConversations);
+  return conv;
+}
+
+function getActiveConversation() {
+  return state.chatConversations.find((c) => c.id === state.chatActiveId) || null;
+}
+
+function updateConversation(id, changes) {
+  const conv = state.chatConversations.find((c) => c.id === id);
+  if (!conv) return;
+  Object.assign(conv, changes, { updatedAt: Date.now() });
+  state.chatConversations.sort((a, b) => b.updatedAt - a.updatedAt);
+  saveChatConversations(state.chatConversations);
+}
+
+function deleteConversation(id) {
+  state.chatConversations = state.chatConversations.filter((c) => c.id !== id);
+  saveChatConversations(state.chatConversations);
+  if (state.chatActiveId === id) {
+    state.chatActiveId = state.chatConversations[0]?.id || null;
+    renderChatMessages();
+    renderChatToolbar();
+  }
+  renderChatSidebar();
+}
+
+function timeAgo(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60_000) return "just now";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 async function testLlmConnection(url) {
