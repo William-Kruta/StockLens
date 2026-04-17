@@ -133,6 +133,127 @@ function timeAgo(ts) {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
+function renderChatSidebar() {
+  const list = $("#chat-conv-list");
+  if (!list) return;
+  if (!state.chatConversations.length) {
+    list.innerHTML = '<div class="chat-conv-empty">No conversations yet.</div>';
+    return;
+  }
+  list.innerHTML = state.chatConversations
+    .map(
+      (conv) => `
+    <div class="chat-conv-item${conv.id === state.chatActiveId ? " active" : ""}"
+         data-conv-id="${conv.id}">
+      <div class="chat-conv-title">${escapeHtml(conv.title)}</div>
+      <div class="chat-conv-meta">${escapeHtml(conv.provider)} · ${timeAgo(conv.updatedAt)}</div>
+      <button class="chat-conv-delete" data-conv-delete="${conv.id}"
+              type="button" aria-label="Delete conversation">×</button>
+    </div>`
+    )
+    .join("");
+  list.querySelectorAll("[data-conv-id]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-conv-delete]")) return;
+      openConversation(el.dataset.convId);
+    });
+  });
+  list.querySelectorAll("[data-conv-delete]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteConversation(btn.dataset.convDelete);
+    });
+  });
+}
+
+function appendChatMessage(role, content, streaming = false, provider = null) {
+  const area = $("#chat-messages");
+  if (!area) return null;
+  const div = document.createElement("div");
+  div.className = `chat-msg ${role}`;
+  const roleEl = document.createElement("span");
+  roleEl.className = "chat-msg-role";
+  roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : (provider || "Assistant");
+  const bubble = document.createElement("div");
+  bubble.className = "chat-msg-bubble";
+  bubble.textContent = content;
+  if (streaming) {
+    const cursor = document.createElement("span");
+    cursor.className = "llm-cursor";
+    bubble.appendChild(cursor);
+  }
+  div.appendChild(roleEl);
+  div.appendChild(bubble);
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+  return bubble;
+}
+
+function renderChatMessages() {
+  const area = $("#chat-messages");
+  if (!area) return;
+  const conv = getActiveConversation();
+  const inputEl = $("#chat-input");
+  const sendEl = $("#chat-send");
+  if (!conv) {
+    area.innerHTML = `
+      <div class="chat-empty-state" id="chat-empty-state">
+        <p>No conversation selected.</p>
+        <button class="secondary" id="chat-empty-new" type="button">+ New conversation</button>
+      </div>`;
+    $("#chat-empty-new")?.addEventListener("click", () => {
+      const c = createConversation(defaultChatProvider());
+      openConversation(c.id);
+      renderChatSidebar();
+    });
+    if (inputEl) inputEl.disabled = true;
+    if (sendEl) sendEl.disabled = true;
+    return;
+  }
+  area.innerHTML = "";
+  conv.messages.forEach((msg) =>
+    appendChatMessage(msg.role, msg.content, false, msg.provider)
+  );
+  area.scrollTop = area.scrollHeight;
+  if (inputEl) inputEl.disabled = false;
+  if (sendEl) sendEl.disabled = false;
+}
+
+function renderChatToolbar() {
+  const titleEl = $("#chat-conv-title");
+  const providerBtn = $("#chat-provider-btn");
+  const conv = getActiveConversation();
+  if (!titleEl || !providerBtn) return;
+  if (!conv) {
+    titleEl.textContent = "";
+    providerBtn.textContent = "— ▾";
+    providerBtn.disabled = true;
+    return;
+  }
+  titleEl.textContent = conv.title;
+  const modelShort = conv.model
+    ? conv.model.split("-").slice(0, 3).join("-")
+    : "";
+  providerBtn.textContent = modelShort
+    ? `${conv.provider} · ${modelShort} ▾`
+    : `${conv.provider} ▾`;
+  providerBtn.disabled = false;
+}
+
+function defaultChatProvider() {
+  if (state.chatProviders.claude) return "claude";
+  if (state.chatProviders.openai) return "openai";
+  return "llama";
+}
+
+function openConversation(id) {
+  state.chatActiveId = id;
+  renderChatSidebar();
+  renderChatMessages();
+  renderChatToolbar();
+  $("#chat-input")?.focus();
+}
+
 async function testLlmConnection(url) {
   const res = await fetch(`${url.replace(/\/$/, "")}/v1/models`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
