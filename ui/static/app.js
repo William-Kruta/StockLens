@@ -382,6 +382,89 @@ async function generateChatTitle(convId, firstMessage, provider, model) {
   } catch {}
 }
 
+function renderChatProviderDropdown() {
+  const dropdown = $("#chat-provider-dropdown");
+  const conv = getActiveConversation();
+  if (!dropdown || !conv) return;
+
+  const providers = [
+    {
+      key: "llama",
+      label: "Llama.cpp",
+      models: null,
+      available: !!loadLlmSettings().serverUrl,
+    },
+    {
+      key: "claude",
+      label: "Claude",
+      models: CHAT_MODELS.claude,
+      available: state.chatProviders.claude,
+    },
+    {
+      key: "openai",
+      label: "OpenAI",
+      models: CHAT_MODELS.openai,
+      available: state.chatProviders.openai,
+    },
+  ];
+
+  dropdown.innerHTML = providers
+    .map(
+      (p) => `
+    <div class="chat-provider-option${!p.available ? " disabled" : ""}${conv.provider === p.key ? " active" : ""}"
+         data-provider="${p.key}"
+         ${!p.available ? 'title="Not configured"' : ""}>
+      <span class="chat-provider-name">${p.label}</span>
+      ${
+        p.models
+          ? `<select class="chat-model-select" data-provider-model="${p.key}"
+               ${!p.available ? "disabled" : ""}>
+               ${p.models
+                 .map(
+                   (m) =>
+                     `<option value="${m}"${conv.provider === p.key && conv.model === m ? " selected" : ""}>${m}</option>`
+                 )
+                 .join("")}
+             </select>`
+          : ""
+      }
+    </div>`
+    )
+    .join("");
+
+  dropdown.querySelectorAll(".chat-provider-option:not(.disabled)").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.tagName === "SELECT" || e.target.tagName === "OPTION") return;
+      const modelSel = el.querySelector("[data-provider-model]");
+      switchChatProvider(el.dataset.provider, modelSel?.value || null);
+    });
+  });
+
+  dropdown.querySelectorAll("[data-provider-model]").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      e.stopPropagation();
+      switchChatProvider(sel.dataset.providerModel, sel.value);
+    });
+  });
+}
+
+function switchChatProvider(provider, model) {
+  const conv = getActiveConversation();
+  if (!conv) return;
+  updateConversation(conv.id, { provider, model });
+  closeChatProviderDropdown();
+  renderChatToolbar();
+}
+
+function openChatProviderDropdown() {
+  renderChatProviderDropdown();
+  $("#chat-provider-dropdown")?.classList.remove("hidden");
+}
+
+function closeChatProviderDropdown() {
+  $("#chat-provider-dropdown")?.classList.add("hidden");
+}
+
 async function testLlmConnection(url) {
   const res = await fetch(`${url.replace(/\/$/, "")}/v1/models`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
