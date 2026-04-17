@@ -41,7 +41,7 @@ function loadLlmSettings() {
 }
 
 function saveLlmSettings(url) {
-  localStorage.setItem(LLM_URL_KEY, url.trim());
+  localStorage.setItem(LLM_URL_KEY, url.trim().replace(/\/$/, ""));
 }
 
 async function testLlmConnection(url) {
@@ -69,6 +69,10 @@ function closeLlmSidebar() {
 function showLlmView(view) {
   $$(".llm-view").forEach((v) => v.classList.remove("active"));
   $(`#llm-${view}-view`).classList.add("active");
+}
+
+function updateLlmContextBar() {
+  // stub — replaced in Task 4
 }
 
 const $ = (selector) => document.querySelector(selector);
