@@ -216,7 +216,6 @@ function openTickerPage(ticker, name) {
   history.pushState({}, "", `/ticker/${ticker}`);
   setRoute("ticker", true);
   runTickerChart();
-  if (state.llmOpen) updateLlmContextBar();
 }
 
 function setTickerMainTab(tab) {
