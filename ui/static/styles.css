@@ -1031,7 +1031,7 @@ tr:hover td {
   border-left: 1px solid #2a2a3a;
   display: flex;
   flex-direction: column;
-  z-index: 100;
+  z-index: 200;
   transform: translateX(100%);
   transition: transform 0.25s ease;
   box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
@@ -1042,7 +1042,7 @@ tr:hover td {
   display: none;
   position: fixed;
   inset: 0;
-  z-index: 99;
+  z-index: 199;
 }
 .llm-backdrop.visible { display: block; }
 
