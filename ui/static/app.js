@@ -1436,6 +1436,7 @@ async function streamLlmResponse(messages) {
   }
 
   if (!res.ok) {
+    res.body.cancel();
     bubble.parentElement.remove();
     appendLlmMessage("error", `⚠ LLM server returned HTTP ${res.status}. Check Settings.`);
     return "";
@@ -1445,7 +1446,7 @@ async function streamLlmResponse(messages) {
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
+  outer: while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -1454,7 +1455,7 @@ async function streamLlmResponse(messages) {
     for (const line of lines) {
       if (!line.startsWith("data: ")) continue;
       const raw = line.slice(6).trim();
-      if (raw === "[DONE]") break;
+      if (raw === "[DONE]") break outer;
       try {
         const obj = JSON.parse(raw);
         const token = obj.choices?.[0]?.delta?.content;
