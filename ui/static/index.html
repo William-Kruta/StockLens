@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>secrs Terminal</title>
+    <title>StockLens Terminal</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css" />
@@ -11,7 +11,7 @@
   <body>
     <header class="topbar">
       <a class="brand" href="/dashboard" data-route="dashboard">
-        <span>secrs</span>
+        <span>StockLens</span>
       </a>
 
       <div class="search-wrap" id="search-wrap">
@@ -205,6 +205,7 @@
                 placeholder="Ask anything… (Enter to send)"
                 rows="1" disabled></textarea>
               <button class="web-search-toggle" id="chat-web-toggle" type="button" title="Include web search results" aria-pressed="false" disabled>🌐</button>
+              <button class="web-search-toggle" id="chat-deep-toggle" type="button" title="Deep research mode" aria-pressed="false" disabled>🔬</button>
               <button class="chat-send" id="chat-send" type="button" aria-label="Send message" title="Send" disabled>↑</button>
             </div>
           </div>
@@ -496,6 +497,7 @@
     </div>
 
     <div class="llm-sidebar" id="llm-sidebar" aria-label="LLM Chat" role="complementary">
+      <div class="llm-resize-handle" id="llm-resize-handle"></div>
 
       <!-- Chat view (default) -->
       <div class="llm-view llm-chat-view active" id="llm-chat-view">
@@ -556,6 +558,7 @@
 
     </div>
     <div class="llm-backdrop" id="llm-backdrop"></div>
+    <script src="/static/marked.min.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

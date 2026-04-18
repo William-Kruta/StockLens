@@ -27,6 +27,7 @@ const state = {
   chatSettingsOpen: false,
   llmWebSearch: false,
   chatWebSearch: false,
+  chatDeepResearch: false,
 };
 
 // Color + group metadata for each indicator key
@@ -71,16 +72,22 @@ const CHAT_MODELS = {
   openai: ["gpt-4o", "gpt-4o-mini"],
 };
 
+function renderMarkdown(text) {
+  if (!text || typeof marked === "undefined") return text || "";
+  return marked.parse(text, { breaks: true, gfm: true });
+}
+
 async function fetchWebContext(query) {
   try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&max=5`);
+    const res = await fetch(`/api/web-search?q=${encodeURIComponent(query)}&max=5`);
     if (!res.ok) return null;
     const results = await res.json();
     if (!Array.isArray(results) || !results.length) return null;
     const lines = results.map((r, i) =>
       `${i + 1}. ${r.title}\n   ${r.snippet}\n   ${r.url}`
     );
-    return `[Web search results for: "${query}"]\n\n${lines.join("\n\n")}`;
+    const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+    return `[Today's date: ${today}]\n\n[Web search results for: "${query}"]\n\n${lines.join("\n\n")}`;
   } catch {
     return null;
   }
@@ -206,7 +213,11 @@ function appendChatMessage(role, content, streaming = false, provider = null) {
   roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : (provider || "Assistant");
   const bubble = document.createElement("div");
   bubble.className = "chat-msg-bubble";
-  bubble.textContent = content;
+  if (streaming || role !== "assistant") {
+    bubble.textContent = content;
+  } else {
+    bubble.innerHTML = renderMarkdown(content);
+  }
   if (streaming) {
     const cursor = document.createElement("span");
     cursor.className = "llm-cursor";
@@ -240,11 +251,15 @@ function renderChatMessages() {
     if (sendEl) sendEl.disabled = true;
     const webToggle = $("#chat-web-toggle");
     if (webToggle) webToggle.disabled = true;
+    const deepToggle = $("#chat-deep-toggle");
+    if (deepToggle) deepToggle.disabled = true;
     return;
   }
   area.innerHTML = "";
   const webToggle = $("#chat-web-toggle");
   if (webToggle) webToggle.disabled = false;
+  const deepToggle = $("#chat-deep-toggle");
+  if (deepToggle) deepToggle.disabled = false;
   conv.messages.forEach((msg) =>
     appendChatMessage(msg.role, msg.content, false, msg.provider)
   );
@@ -349,11 +364,186 @@ async function streamChatResponse(messages, provider, model, bubbleEl) {
   reader.cancel();
   const cursor = bubbleEl.querySelector(".llm-cursor");
   if (cursor) cursor.remove();
-  bubbleEl.textContent = content;
+  bubbleEl.innerHTML = renderMarkdown(content);
   return { content, error: null };
 }
 
+async function sendDeepResearch() {
+  const input = $("#chat-input");
+  const text = input?.value.trim();
+  const conv = getActiveConversation();
+  if (!text || !conv || state.chatStreaming) return;
+
+  const { provider, model } = conv;
+  const llamaUrl = provider === "llama" ? (loadLlmSettings().serverUrl || "http://localhost:8080") : undefined;
+
+  state.chatStreaming = true;
+  input.value = "";
+  input.style.height = "38px";
+  $("#chat-send")?.setAttribute("disabled", "");
+
+  const isFirstAssistant = !conv.messages.some((m) => m.role === "assistant");
+  conv.messages.push({ role: "user", content: text, timestamp: Date.now() });
+  updateConversation(conv.id, {});
+  appendChatMessage("user", text);
+
+  // Build research progress card
+  const area = $("#chat-messages");
+  const progressMsgDiv = document.createElement("div");
+  progressMsgDiv.className = "chat-msg assistant";
+  const progressRoleEl = document.createElement("span");
+  progressRoleEl.className = "chat-msg-role";
+  progressRoleEl.textContent = provider || "Assistant";
+  const progressCard = document.createElement("div");
+  progressCard.className = "research-progress";
+  progressCard.innerHTML = `<div class="research-header">🔬 Deep Research</div><div class="research-phase">Planning…</div>`;
+  progressMsgDiv.appendChild(progressRoleEl);
+  progressMsgDiv.appendChild(progressCard);
+  area.appendChild(progressMsgDiv);
+  area.scrollTop = area.scrollHeight;
+
+  const apiMessages = conv.messages
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({ role: m.role, content: m.content }));
+
+  let content = "";
+  let isClarification = false;
+  let queries = [];
+  const queryStatus = {};
+  let answerBubble = null; // created via appendChatMessage when synthesizing starts
+
+  function redrawProgress() {
+    let html = `<div class="research-header">🔬 Deep Research</div>`;
+    const phaseText = progressCard.dataset.phase || "Planning…";
+    html += `<div class="research-phase">${phaseText}</div>`;
+    if (queries.length) {
+      html += `<ul class="research-query-list">`;
+      for (const q of queries) {
+        const s = queryStatus[q] || "pending";
+        const icon = s === "done" ? "✓" : s === "active" ? "⟳" : "○";
+        const cls = s === "done" ? "done" : s === "active" ? "active" : "";
+        html += `<li class="research-query-item"><em class="research-q-icon ${cls}">${icon}</em><span>${q}</span></li>`;
+      }
+      html += `</ul>`;
+    }
+    progressCard.innerHTML = html;
+  }
+
+  function setPhase(text) {
+    progressCard.dataset.phase = text;
+    redrawProgress();
+  }
+
+  try {
+    const res = await fetch("/api/chat/deep-research", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: apiMessages, provider, model, ...(llamaUrl && { llamaUrl }) }),
+    });
+    if (!res.ok) {
+      progressMsgDiv.remove();
+      appendChatMessage("error", `⚠ HTTP ${res.status}`);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    outer: while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (raw === "[DONE]") break outer;
+        try {
+          const evt = JSON.parse(raw);
+          switch (evt.type) {
+            case "status":
+              setPhase(evt.text);
+              break;
+            case "plan":
+              queries = evt.queries;
+              for (const q of queries) queryStatus[q] = "pending";
+              setPhase("Searching the web…");
+              break;
+            case "searching":
+              queryStatus[evt.query] = "active";
+              redrawProgress();
+              break;
+            case "search_done":
+              queryStatus[evt.query] = "done";
+              redrawProgress();
+              break;
+            case "synthesizing":
+              setPhase("Synthesizing…");
+              // Use the same appendChatMessage pattern as normal streaming
+              answerBubble = appendChatMessage("assistant", "", true, provider);
+              break;
+            case "token":
+              if (answerBubble) {
+                content += evt.content;
+                const cursor = answerBubble.querySelector(".llm-cursor");
+                if (cursor) cursor.remove();
+                answerBubble.textContent = content;
+                const newCursor = document.createElement("span");
+                newCursor.className = "llm-cursor";
+                answerBubble.appendChild(newCursor);
+                area.scrollTop = area.scrollHeight;
+              }
+              break;
+            case "clarification":
+              isClarification = true;
+              content = evt.text;
+              progressMsgDiv.remove();
+              appendChatMessage("assistant", evt.text, false, provider);
+              break;
+            case "error":
+              progressMsgDiv.remove();
+              if (answerBubble) answerBubble.closest(".chat-msg")?.remove();
+              appendChatMessage("error", `⚠ ${evt.text}`);
+              break;
+          }
+        } catch {}
+      }
+    }
+    reader.cancel();
+    if (answerBubble) {
+      answerBubble.querySelector(".llm-cursor")?.remove();
+      if (content) {
+        answerBubble.innerHTML = renderMarkdown(content);
+      } else {
+        answerBubble.textContent = "(No response)";
+      }
+    }
+
+    if (content && !isClarification) {
+      conv.messages.push({ role: "assistant", content, provider, model, timestamp: Date.now() });
+      updateConversation(conv.id, {});
+      if (isFirstAssistant) generateChatTitle(conv.id, text, provider, model);
+    } else if (isClarification) {
+      conv.messages.push({ role: "assistant", content, provider, model, timestamp: Date.now() });
+      updateConversation(conv.id, {});
+    }
+  } catch (err) {
+    appendChatMessage("error", `⚠ ${err.message}`);
+  } finally {
+    state.chatStreaming = false;
+    $("#chat-send")?.removeAttribute("disabled");
+    const wt = $("#chat-web-toggle");
+    if (wt) wt.disabled = false;
+    const dt2 = $("#chat-deep-toggle");
+    if (dt2) dt2.disabled = false;
+  }
+}
+
 async function sendChatMessage() {
+  if (state.chatDeepResearch) return sendDeepResearch();
+
   const input = $("#chat-input");
   const text = input?.value.trim();
   const conv = getActiveConversation();
@@ -368,7 +558,7 @@ async function sendChatMessage() {
   const userMsg = { role: "user", content: text, timestamp: Date.now() };
   conv.messages.push(userMsg);
   updateConversation(conv.id, {});
-  appendChatMessage("user", text);
+  const userBubble = appendChatMessage("user", text);
 
   const { provider, model } = conv;
   const bubble = appendChatMessage("assistant", "", true, provider);
@@ -380,6 +570,7 @@ async function sendChatMessage() {
     const webCtx = await fetchWebContext(text);
     if (webCtx && apiMessages.length) {
       apiMessages[apiMessages.length - 1] = { role: "user", content: `${webCtx}\n\n---\n\n${text}` };
+      userBubble?.closest(".chat-msg")?.classList.add("web-search");
     }
   }
 
@@ -522,6 +713,19 @@ function bindChat() {
     const btn = $("#chat-web-toggle");
     btn.classList.toggle("active", state.chatWebSearch);
     btn.setAttribute("aria-pressed", String(state.chatWebSearch));
+  });
+
+  $("#chat-deep-toggle")?.addEventListener("click", () => {
+    state.chatDeepResearch = !state.chatDeepResearch;
+    const btn = $("#chat-deep-toggle");
+    btn.classList.toggle("active", state.chatDeepResearch);
+    btn.setAttribute("aria-pressed", String(state.chatDeepResearch));
+    const input = $("#chat-input");
+    if (input) {
+      input.placeholder = state.chatDeepResearch
+        ? "Ask a research question… (Enter to send)"
+        : "Ask anything… (Enter to send)";
+    }
   });
 
   $("#chat-input")?.addEventListener("keydown", (e) => {
@@ -726,7 +930,7 @@ function buildLlmContext() {
 
 function buildSystemPrompt() {
   const ctx = buildLlmContext();
-  let prompt = `You are a financial analysis assistant embedded in secrs, a SEC EDGAR filings tool.\nThe user is currently viewing: ${ctx.description}.`;
+  let prompt = `You are a financial analysis assistant embedded in StockLens, a SEC EDGAR filings tool.\nThe user is currently viewing: ${ctx.description}.`;
   if (ctx.data) {
     if (typeof ctx.data === "string") {
       prompt += `\n\nContext:\n${ctx.data}`;
@@ -2639,7 +2843,11 @@ function appendLlmMessage(role, content, streaming = false) {
   roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : "LLM";
   const bubble = document.createElement("div");
   bubble.className = "llm-msg-bubble";
-  bubble.textContent = content;
+  if (streaming || role !== "assistant") {
+    bubble.textContent = content;
+  } else {
+    bubble.innerHTML = renderMarkdown(content);
+  }
   if (streaming) {
     const cursor = document.createElement("span");
     cursor.className = "llm-cursor";
@@ -2712,7 +2920,7 @@ async function streamLlmResponse(messages) {
   reader.cancel();
   const cursor = bubble.querySelector(".llm-cursor");
   if (cursor) cursor.remove();
-  bubble.textContent = content;
+  bubble.innerHTML = renderMarkdown(content);
   $("#llm-messages").scrollTop = $("#llm-messages").scrollHeight;
   return content;
 }
@@ -2728,7 +2936,7 @@ async function sendLlmMessage() {
   $("#llm-send").disabled = true;
 
   state.llmHistory.push({ role: "user", content: userText });
-  appendLlmMessage("user", userText);
+  const userBubble = appendLlmMessage("user", userText);
 
   if (state.llmHistory.length > LLM_HISTORY_MAX) {
     state.llmHistory = state.llmHistory.slice(-LLM_HISTORY_MAX);
@@ -2740,6 +2948,7 @@ async function sendLlmMessage() {
     const webCtx = await fetchWebContext(userText);
     if (webCtx) {
       apiHistory = [...state.llmHistory.slice(0, -1), { role: "user", content: `${webCtx}\n\n---\n\n${userText}` }];
+      userBubble?.closest(".llm-msg")?.classList.add("web-search");
     }
   }
   const messages = [systemMsg, ...apiHistory];
@@ -2835,6 +3044,30 @@ function bindLlmSidebar() {
     const ta = $("#llm-textarea");
     ta.style.height = "34px";
     ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`;
+  });
+
+  // Restore saved sidebar width
+  const savedWidth = localStorage.getItem("llm-sidebar-width");
+  if (savedWidth) $("#llm-sidebar").style.width = savedWidth + "px";
+
+  // Drag-to-resize handle
+  const handle = $("#llm-resize-handle");
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    handle.classList.add("dragging");
+    const sidebar = $("#llm-sidebar");
+    const onMove = (ev) => {
+      const w = Math.min(700, Math.max(220, window.innerWidth - ev.clientX));
+      sidebar.style.width = w + "px";
+    };
+    const onUp = () => {
+      handle.classList.remove("dragging");
+      localStorage.setItem("llm-sidebar-width", parseInt($("#llm-sidebar").style.width));
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
   });
 }
 

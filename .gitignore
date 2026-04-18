@@ -9,8 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Git worktrees
-.worktrees/
+run.sh
 
-# Brainstorming session files
-.superpowers/
+.codex

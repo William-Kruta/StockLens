@@ -44,11 +44,294 @@ PAGE_ROUTES = {
 
 def _web_search(query: str, max_results: int = 5) -> list:
     from ddgs import DDGS
+
     with DDGS() as ddgs:
         return [
-            {"title": r.get("title", ""), "snippet": r.get("body", ""), "url": r.get("href", "")}
+            {
+                "title": r.get("title", ""),
+                "snippet": r.get("body", ""),
+                "url": r.get("href", ""),
+            }
             for r in ddgs.text(query, max_results=max_results)
         ]
+
+
+def _call_llm_sync(
+    messages: list,
+    model: str,
+    provider: str,
+    api_key: str,
+    system: str = None,
+    llama_url: str = "http://localhost:8080",
+) -> str:
+    import requests as _req
+
+    if provider == "claude":
+        body = {"model": model, "max_tokens": 1024, "messages": messages}
+        if system:
+            body["system"] = system
+        resp = _req.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=body,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["content"][0]["text"]
+    elif provider == "llama":
+        msgs = ([{"role": "system", "content": system}] if system else []) + messages
+        msgs = _llama_fold_system(msgs)
+        url = f"{llama_url.rstrip('/')}/v1/chat/completions"
+        resp = _req.post(
+            url,
+            headers={"content-type": "application/json"},
+            json={"model": "local", "messages": msgs},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+    else:
+        msgs = ([{"role": "system", "content": system}] if system else []) + messages
+        resp = _req.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            json={"model": model, "max_tokens": 1024, "messages": msgs},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+
+def _llama_fold_system(messages: list) -> list:
+    """Fold a leading system message into the first user message for llama compat."""
+    if not messages or messages[0].get("role") != "system":
+        return messages
+    sys_content = messages[0]["content"]
+    rest = list(messages[1:])
+    if rest and rest[0].get("role") == "user":
+        rest[0] = {"role": "user", "content": f"{sys_content}\n\n{rest[0]['content']}"}
+    else:
+        rest = [{"role": "user", "content": sys_content}] + rest
+    return rest
+
+
+def _get_llama_ctx_size(base_url: str, fallback: int = 2048) -> int:
+    """Query llama.cpp /props for n_ctx; return fallback on any failure."""
+    import requests as _req
+
+    try:
+        resp = _req.get(f"{base_url.rstrip('/')}/props", timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        n_ctx = data.get("n_ctx") or data.get("total_slots", [{}])[0].get("n_ctx")
+        if n_ctx and int(n_ctx) > 0:
+            return int(n_ctx)
+    except Exception:
+        pass
+    return fallback
+
+
+def _trim_search_context(ctx_parts: list[str], max_chars: int) -> str:
+    """Join ctx_parts, truncating search snippets to stay within max_chars."""
+    full = "".join(ctx_parts)
+    if len(full) <= max_chars:
+        return full
+    result = []
+    remaining = max_chars
+    for part in ctx_parts:
+        if remaining <= 0:
+            break
+        chunk = part[:remaining]
+        result.append(chunk)
+        remaining -= len(chunk)
+    return "".join(result)
+
+
+def _stream_llama(payload: dict, base_url: str):
+    import requests as _req
+
+    model = payload.get("model", "local")
+    messages = _llama_fold_system(payload.get("messages", []))
+    url = f"{base_url.rstrip('/')}/v1/chat/completions"
+    resp = _req.post(
+        url,
+        headers={"content-type": "application/json"},
+        json={"model": model, "messages": messages, "stream": True},
+        stream=True,
+        timeout=120,
+    )
+    try:
+        resp.raise_for_status()
+    except _req.HTTPError as exc:
+        try:
+            detail = resp.json().get("error", str(exc))
+        except Exception:
+            detail = str(exc)
+        yield f"data: {json.dumps({'error': str(detail)})}\n\n"
+        return
+    resp.encoding = "utf-8"
+    for raw_line in resp.iter_lines(decode_unicode=True):
+        if raw_line.startswith("data:"):
+            yield raw_line + "\n\n"
+
+
+def _deep_research_stream(payload: dict):
+    provider = payload.get("provider", "claude")
+    model = payload.get("model", "claude-sonnet-4-6")
+    messages = payload.get("messages", [])
+    llama_url = payload.get("llamaUrl", "http://localhost:8080")
+
+    api_key = ""
+    if provider == "claude":
+        api_key = os.environ.get("SECRS_CLAUDE_API_KEY", "")
+        if not api_key:
+            yield f"data: {json.dumps({'type': 'error', 'text': 'SECRS_CLAUDE_API_KEY not set'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+    elif provider == "openai":
+        api_key = os.environ.get("SECRS_OPENAI_API_KEY", "")
+        if not api_key:
+            yield f"data: {json.dumps({'type': 'error', 'text': 'SECRS_OPENAI_API_KEY not set'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+    today = dt.datetime.now().strftime("%B %d, %Y")
+    conv_messages = [m for m in messages if m.get("role") in ("user", "assistant")]
+    user_question = next(
+        (m["content"] for m in reversed(conv_messages) if m["role"] == "user"), ""
+    )
+
+    # ── Phase 1: Planning ─────────────────────────────────────────
+    yield f"data: {json.dumps({'type': 'status', 'text': 'Planning research...'})}\n\n"
+
+    planning_system = (
+        "You are a research planner. Today's date is " + today + ".\n"
+        "Analyze the user's question and produce a focused research plan.\n"
+        "Respond ONLY with raw JSON (no markdown fences) in this exact format:\n"
+        '{"needs_clarification": false, "clarification": null, "queries": ["q1","q2","q3"], "plan": "one-line description"}\n'
+        "Generate 3-5 specific web search queries. "
+        "Only set needs_clarification=true if the question is fundamentally ambiguous."
+    )
+    try:
+        raw = _call_llm_sync(
+            conv_messages, model, provider, api_key, planning_system, llama_url
+        )
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        plan = json.loads(raw.strip())
+    except Exception:
+        plan = {
+            "needs_clarification": False,
+            "queries": [user_question[:120]],
+            "plan": "Direct search",
+        }
+
+    if plan.get("needs_clarification") and plan.get("clarification"):
+        yield f"data: {json.dumps({'type': 'clarification', 'text': plan['clarification']})}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    queries = [str(q) for q in plan.get("queries", [user_question])][:5]
+    yield f"data: {json.dumps({'type': 'plan', 'queries': queries, 'description': plan.get('plan', '')})}\n\n"
+
+    # ── Phase 2: Search ───────────────────────────────────────────
+    all_results = []
+    search_ok = True
+    for i, query in enumerate(queries):
+        yield f"data: {json.dumps({'type': 'searching', 'query': query, 'index': i + 1, 'total': len(queries)})}\n\n"
+        if search_ok:
+            try:
+                results = _web_search(query, max_results=5)
+                all_results.append({"query": query, "results": results})
+                yield f"data: {json.dumps({'type': 'search_done', 'query': query, 'count': len(results)})}\n\n"
+            except Exception:
+                search_ok = False
+                all_results.append({"query": query, "results": []})
+                yield f"data: {json.dumps({'type': 'search_done', 'query': query, 'count': 0})}\n\n"
+        else:
+            all_results.append({"query": query, "results": []})
+            yield f"data: {json.dumps({'type': 'search_done', 'query': query, 'count': 0})}\n\n"
+
+    # ── Phase 3: Synthesize ───────────────────────────────────────
+    yield f"data: {json.dumps({'type': 'synthesizing'})}\n\n"
+
+    ctx_parts = [f"[Today's date: {today}]\n"]
+    for item in all_results:
+        if item["results"]:
+            ctx_parts.append(f'\n[Search results for: "{item["query"]}"]\n')
+            for j, r in enumerate(item["results"]):
+                ctx_parts.append(
+                    f'{j + 1}. {r["title"]}\n   {r["snippet"]}\n   {r["url"]}\n'
+                )
+
+    if provider == "llama":
+        n_ctx = _get_llama_ctx_size(llama_url)
+        # Reserve 40% for response; subtract ~300 tokens overhead for system + question
+        max_ctx_tokens = int(n_ctx * 0.6) - 300
+        max_search_chars = max(500, max_ctx_tokens * 4)
+        context = _trim_search_context(ctx_parts, max_search_chars)
+    else:
+        context = "".join(ctx_parts)
+
+    has_results = any(item["results"] for item in all_results)
+    if has_results:
+        enriched = (
+            f"{context}\n\n---\n\n"
+            f"Based on the above research, provide a comprehensive answer to: {user_question}"
+        )
+    else:
+        enriched = user_question
+
+    synth_messages = conv_messages[:-1] + [{"role": "user", "content": enriched}]
+    synthesis_system = (
+        "You are a research analyst. Synthesize web search results into a comprehensive, well-structured answer. "
+        "Cite sources where relevant. Be thorough and accurate. "
+        f"Today's date is {today}."
+    )
+    synth_payload = {
+        "model": model,
+        "messages": [{"role": "system", "content": synthesis_system}] + synth_messages,
+    }
+    if provider == "claude":
+        stream_gen = _stream_claude(synth_payload)
+    elif provider == "llama":
+        synth_payload["model"] = "local"
+        stream_gen = _stream_llama(synth_payload, llama_url)
+    else:
+        stream_gen = _stream_openai(synth_payload)
+
+    try:
+        for chunk in stream_gen:
+            stripped = chunk.strip()
+            if stripped in ("data: [DONE]", "data:[DONE]"):
+                break
+            if stripped.startswith("data:"):
+                raw = stripped[5:].lstrip(" \t")
+                try:
+                    obj = json.loads(raw)
+                    token = (obj.get("choices") or [{}])[0].get("delta", {}).get(
+                        "content"
+                    ) or ""
+                    if token:
+                        yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                    elif "error" in obj:
+                        yield f"data: {json.dumps({'type': 'error', 'text': str(obj['error'])})}\n\n"
+                except (json.JSONDecodeError, IndexError, KeyError):
+                    pass
+    except Exception as exc:
+        yield f"data: {json.dumps({'type': 'error', 'text': f'Synthesis failed: {exc}'})}\n\n"
+
+    yield "data: [DONE]\n\n"
 
 
 def _chat_providers() -> dict:
@@ -60,6 +343,7 @@ def _chat_providers() -> dict:
 
 def _stream_claude(payload: dict):
     import requests as _req
+
     api_key = os.environ.get("SECRS_CLAUDE_API_KEY", "")
     model = payload.get("model", "claude-sonnet-4-6")
     messages = payload.get("messages", [])
@@ -77,7 +361,10 @@ def _stream_claude(payload: dict):
         body["system"] = system_text
     resp = _req.post(
         "https://api.anthropic.com/v1/messages",
-        headers=headers, json=body, stream=True, timeout=60,
+        headers=headers,
+        json=body,
+        stream=True,
+        timeout=60,
     )
     try:
         resp.raise_for_status()
@@ -106,6 +393,7 @@ def _stream_claude(payload: dict):
 
 def _stream_openai(payload: dict):
     import requests as _req
+
     api_key = os.environ.get("SECRS_OPENAI_API_KEY", "")
     model = payload.get("model", "gpt-4o")
     messages = payload.get("messages", [])
@@ -116,7 +404,10 @@ def _stream_openai(payload: dict):
     body = {"model": model, "messages": messages, "stream": True}
     resp = _req.post(
         "https://api.openai.com/v1/chat/completions",
-        headers=headers, json=body, stream=True, timeout=60,
+        headers=headers,
+        json=body,
+        stream=True,
+        timeout=60,
     )
     try:
         resp.raise_for_status()
@@ -847,10 +1138,22 @@ def _upcoming_ipo_calendar() -> dict:
         rows.extend(data.get("rows", []))
 
     rows = _dedupe_ipo_rows(rows)
-    rows.sort(key=lambda item: (str(item.get("Date") or ""), str(item.get("Symbol") or "")))
+    rows.sort(
+        key=lambda item: (str(item.get("Date") or ""), str(item.get("Symbol") or ""))
+    )
 
     if not columns:
-        columns = ["Symbol", "Company", "Exchange", "Date", "Price Range", "Price", "Currency", "Shares", "Actions"]
+        columns = [
+            "Symbol",
+            "Company",
+            "Exchange",
+            "Date",
+            "Price Range",
+            "Price",
+            "Currency",
+            "Shares",
+            "Actions",
+        ]
 
     payload = {
         "title": f"Upcoming IPOs · {start.isoformat()} to {end.isoformat()}",
@@ -916,11 +1219,7 @@ def _empty_ipo_payload(day: str) -> dict:
 
 def _is_empty_ipo_error(exc: Exception) -> bool:
     text = str(exc)
-    return (
-        "404" in text
-        or "No IPO calendar table found" in text
-        or "html5lib" in text
-    )
+    return "404" in text or "No IPO calendar table found" in text or "html5lib" in text
 
 
 def _clean_market_table(df: pd.DataFrame) -> pd.DataFrame:
@@ -1034,7 +1333,9 @@ def _ipo_markets() -> dict:
         and time.time() - entry.get("checked_at", entry["fetched_at"])
         < _MARKETS_CACHE_TTL_SECONDS
     ):
-        return _markets_cache_response("ipo", "stale" if entry.get("warning") else "hit")
+        return _markets_cache_response(
+            "ipo", "stale" if entry.get("warning") else "hit"
+        )
 
     with _MARKETS_LOCKS["ipo"]:
         entry = _MARKETS_CACHE.get("ipo")
@@ -1249,10 +1550,12 @@ class UIHandler(BaseHTTPRequestHandler):
         if path == "/api/chat/providers":
             self._send_json(_chat_providers())
             return
-        if path == "/api/search":
+        if path == "/api/web-search":
             q = parse_qs(parsed.query).get("q", [""])[0].strip()
             if not q:
-                self._send_json({"error": "Missing query"}, status=HTTPStatus.BAD_REQUEST)
+                self._send_json(
+                    {"error": "Missing query"}, status=HTTPStatus.BAD_REQUEST
+                )
                 return
             try:
                 self._send_json(_web_search(q))
@@ -1294,10 +1597,21 @@ class UIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/chat/deep-research":
+            payload = self._read_json()
+            try:
+                self._send_sse_stream(_deep_research_stream(payload))
+            except Exception as exc:
+                print(f"[deep-research] error: {exc}", flush=True)
+            return
         if path in ("/api/chat/claude", "/api/chat/openai"):
             payload = self._read_json()
             provider = "claude" if path.endswith("claude") else "openai"
-            key_var = "SECRS_CLAUDE_API_KEY" if provider == "claude" else "SECRS_OPENAI_API_KEY"
+            key_var = (
+                "SECRS_CLAUDE_API_KEY"
+                if provider == "claude"
+                else "SECRS_OPENAI_API_KEY"
+            )
             if not os.environ.get(key_var):
                 self._send_json(
                     {"error": f"{key_var} environment variable not set"},
@@ -1305,7 +1619,11 @@ class UIHandler(BaseHTTPRequestHandler):
                 )
                 return
             try:
-                gen = _stream_claude(payload) if provider == "claude" else _stream_openai(payload)
+                gen = (
+                    _stream_claude(payload)
+                    if provider == "claude"
+                    else _stream_openai(payload)
+                )
                 self._send_sse_stream(gen)
             except Exception as exc:
                 print(f"[chat] stream error: {exc}", flush=True)
@@ -1361,12 +1679,12 @@ class UIHandler(BaseHTTPRequestHandler):
 
 def run(host: str = "127.0.0.1", port: int = 8765):
     httpd = ThreadingHTTPServer((host, port), UIHandler)
-    print(f"secrs UI running at http://{host}:{port}")
+    print(f"StockLens UI running at http://{host}:{port}")
     httpd.serve_forever()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the secrs web UI.")
+    parser = argparse.ArgumentParser(description="Run the StockLens web UI.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", default=8765, type=int)
     args = parser.parse_args()

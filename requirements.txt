@@ -4,6 +4,7 @@ pandas
 pyarrow
 yfinance
 yahoors
+secrs
 # Web
 requests
 beautifulsoup4
