@@ -3,8 +3,16 @@ polars
 pandas
 pyarrow
 yfinance
+
+# Custom packages (view: https://github.com/William-Kruta to learn more)
 yahoors
 secrs
+insidertracker
+macrotracker
+etftracker
+
+
+
 # Web
 requests
 beautifulsoup4

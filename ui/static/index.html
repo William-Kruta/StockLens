@@ -35,7 +35,13 @@
         <a href="/chat" data-route="chat">Chat</a>
         <a href="/multi" data-route="multi">Multi</a>
         <a href="/watchlist" data-route="watchlist">Watchlist</a>
-        <a href="/screener" data-route="screener">Screener</a>
+        <div class="nav-group" data-route-group="screener">
+          <button class="nav-parent" type="button">Screener ▾</button>
+          <div class="nav-menu">
+            <a href="/screener" data-route="screener">Financial Screener</a>
+            <a href="/option-screener" data-route="option-screener">Option Screener</a>
+          </div>
+        </div>
         <a href="/dcf" data-route="dcf">DCF</a>
       </nav>
     </header>
@@ -63,13 +69,23 @@
             <p class="eyebrow" id="ticker-eyebrow">Ticker</p>
             <h1 id="ticker-heading">—</h1>
           </div>
+          <div class="ticker-header-actions">
+            <div class="ticker-watchlist-picker" id="ticker-watchlist-picker">
+              <button class="secondary" id="ticker-watchlist-btn" type="button" aria-expanded="false">
+                Add To Watchlist +
+              </button>
+              <div class="ticker-watchlist-menu hidden" id="ticker-watchlist-menu"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Top-level tabs -->
         <div class="ticker-main-tabs">
           <button class="ticker-main-tab active" data-main-tab="chart">Chart</button>
           <button class="ticker-main-tab" data-main-tab="financials">Financials</button>
+          <button class="ticker-main-tab" data-main-tab="options">Options</button>
           <button class="ticker-main-tab" data-main-tab="info">Info</button>
+          <button class="ticker-main-tab" data-main-tab="insider">Insider Trades</button>
         </div>
 
         <!-- Chart view -->
@@ -118,6 +134,7 @@
                 <option value="balance_sheet">Balance Sheet</option>
                 <option value="cash_flow">Cash Flow</option>
                 <option value="regions">Regions</option>
+                <option value="segments">Segments</option>
               </select>
             </label>
             <label>
@@ -134,6 +151,33 @@
                 <option value="false">Long</option>
               </select>
             </label>
+            <label class="ticker-financials-toggle hidden" id="ticker-percentage-toggle-wrap" for="ticker-percentage-toggle">
+              <span class="ticker-financials-toggle-label">%</span>
+              <span class="ticker-financials-switch" aria-hidden="true">
+                <input id="ticker-percentage-toggle" type="checkbox" />
+                <span class="ticker-financials-slider"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Options view -->
+        <div class="ticker-view" id="ticker-options-view">
+          <div class="ticker-financials-bar">
+            <label>
+              Fetch DTE
+              <select id="ticker-options-fetch-dte">
+                <option value="7">7</option>
+                <option value="14">14</option>
+                <option value="30" selected>30</option>
+                <option value="60">60</option>
+                <option value="90">90</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+          </div>
+          <div id="ticker-options-body">
+            <div class="ticker-info-empty">Select a ticker to view options.</div>
           </div>
         </div>
 
@@ -141,6 +185,13 @@
         <div class="ticker-view" id="ticker-info-view">
           <div id="ticker-info-body">
             <div class="ticker-info-empty">Select a ticker to view company info.</div>
+          </div>
+        </div>
+
+        <!-- Insider Trades view -->
+        <div class="ticker-view" id="ticker-insider-view">
+          <div id="ticker-insider-body">
+            <div class="ticker-info-empty">Select a ticker to view insider trades.</div>
           </div>
         </div>
 
@@ -294,15 +345,31 @@
         </div>
         <div class="markets-tabs">
           <button class="markets-tab active" data-markets-sub="most_active">Most Active</button>
-          <button class="markets-tab" data-markets-sub="trending">Trending</button>
           <button class="markets-tab" data-markets-sub="gainers">Top Gainers</button>
           <button class="markets-tab" data-markets-sub="losers">Top Losers</button>
-          <button class="markets-tab" data-markets-sub="unusual_volume">Unusual Volume</button>
-          <button class="markets-tab" data-markets-sub="small_cap">Small Cap</button>
-          <button class="markets-tab" data-markets-sub="commodities">Commodities</button>
-          <button class="markets-tab" data-markets-sub="world_indices">World Indices</button>
-          <button class="markets-tab" data-markets-sub="ipo">IPO</button>
-          <button class="markets-tab" data-markets-sub="private_companies">Private Companies</button>
+          <div class="markets-tab-group">
+            <button class="markets-tab markets-tab-parent" type="button">Discover ▾</button>
+            <div class="markets-tab-menu">
+              <button class="markets-tab markets-tab-item" data-markets-sub="trending">Trending</button>
+              <button class="markets-tab markets-tab-item" data-markets-sub="unusual_volume">Unusual Volume</button>
+              <button class="markets-tab markets-tab-item" data-markets-sub="small_cap">Small Cap</button>
+              <button class="markets-tab markets-tab-item" data-markets-sub="ipo">IPO</button>
+              <button class="markets-tab markets-tab-item" data-markets-sub="private_companies">Private Companies</button>
+            </div>
+          </div>
+          <div class="markets-tab-group">
+            <button class="markets-tab markets-tab-parent" type="button">Macro ▾</button>
+            <div class="markets-tab-menu">
+              <button class="markets-tab markets-tab-item" data-markets-sub="commodities">Commodities</button>
+              <button class="markets-tab markets-tab-item" data-markets-sub="world_indices">World Indices</button>
+            </div>
+          </div>
+          <div class="markets-tab-group">
+            <button class="markets-tab markets-tab-parent" type="button">Insider Trades ▾</button>
+            <div class="markets-tab-menu">
+              <button class="markets-tab markets-tab-item" data-markets-sub="insider_cluster_buys">Cluster Buys</button>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -405,6 +472,58 @@
           </label>
           <button type="submit">Screen</button>
         </form>
+      </section>
+
+      <section class="page" id="option-screener-page">
+        <div class="page-head">
+          <div>
+            <p class="eyebrow">Option Screener</p>
+            <h1>Screen option contracts from a watchlist</h1>
+          </div>
+        </div>
+        <form id="option-screener-form" class="control-surface">
+          <label class="wide">
+            Watchlist
+            <select id="option-screener-watchlist" name="watchlist"></select>
+          </label>
+          <label>
+            Fetch DTE
+            <select id="option-screener-fetch-dte" name="max_dte">
+              <option value="7">7</option>
+              <option value="14">14</option>
+              <option value="30" selected>30</option>
+              <option value="60">60</option>
+              <option value="90">90</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <label>
+            Position
+            <select id="option-screener-side" name="long">
+              <option value="false" selected>Short</option>
+              <option value="true">Long</option>
+            </select>
+          </label>
+          <label>
+            Moneyness
+            <select id="option-screener-moneyness" name="in_the_money">
+              <option value="false" selected>OTM</option>
+              <option value="true">ITM</option>
+            </select>
+          </label>
+          <label>
+            Min Collateral
+            <input id="option-screener-min-collateral" name="min_collateral" type="number" min="0" step="100" value="0" />
+          </label>
+          <label>
+            Max Collateral
+            <input id="option-screener-max-collateral" name="max_collateral" type="number" min="0" step="100" placeholder="No max" />
+          </label>
+          <button type="submit">Screen Options</button>
+        </form>
+        <div class="control-surface option-screener-results" id="option-screener-body">
+          <div class="ticker-info-empty">Select a watchlist to screen option contracts.</div>
+        </div>
       </section>
 
       <section class="page" id="dcf-page">
@@ -559,6 +678,6 @@
     </div>
     <div class="llm-backdrop" id="llm-backdrop"></div>
     <script src="/static/marked.min.js"></script>
-    <script src="/static/app.js"></script>
+    <script type="module" src="/static/app.js"></script>
   </body>
 </html>

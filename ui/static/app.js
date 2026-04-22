@@ -1,34 +1,28 @@
-const state = {
-  route: "dashboard",
-  marketsSub: "most_active",
-  marketsCache: new Map(),
-  metrics: [],
-  watchlists: [],
-  editingWatchlist: null,
-  expandedWatchlists: new Set(),
-  ticker: null,
-  tickerName: null,
-  tickerBackPath: null,
-  tickerMainTab: "chart",
-  tickerView: "income_statement",
-  chartPeriod: "1mo",
-  chartInterval: "1d",
-  compareTickers: [],
-  indicators: new Set(),   // active indicator keys
-  llmOpen: false,
-  llmHistory: [],    // [{role, content}] persists across navigation
-  llmStreaming: false,
-  marketStatus: null,
-  marketStatusTimer: null,
-  chatConversations: [],
-  chatActiveId: null,
-  chatStreaming: false,
-  chatProviders: { llama: false, claude: false, openai: false },
-  chatSettingsOpen: false,
-  llmWebSearch: false,
-  chatWebSearch: false,
-  chatDeepResearch: false,
-};
+import { state } from "/modules/state.js";
+import { $, $$ } from "/modules/dom.js";
+import { post, setStatus } from "/modules/data.js";
+import { renderTable, renderSummary, formatValue } from "/modules/table.js";
+import {
+  bindTickerFinancialsControls,
+  runTickerFinancials,
+} from "/modules/tickerFinancials.js";
+import {
+  bindDashboard as bindDashboardModule,
+  bindMarkets as bindMarketsModule,
+  runDashboard as runDashboardModule,
+  runMarkets as runMarketsModule,
+} from "/modules/markets.js";
+import { initSearch as initSearchModule } from "/modules/search.js";
+import {
+  bindOptionScreener,
+  renderOptionScreenerWatchlists,
+} from "/modules/optionScreener.js";
+import {
+  runTickerOptions as runTickerOptionsModule,
+  runTickerInfo as runTickerInfoModule,
+  runTickerInsider as runTickerInsiderModule,
+} from "/modules/tickerDetails.js";
+import { escapeHtml, tickerList, uniqueTickers } from "/modules/utils.js";
 
 // Color + group metadata for each indicator key
 const INDICATOR_DEFS = {
@@ -72,9 +66,47 @@ const CHAT_MODELS = {
   openai: ["gpt-4o", "gpt-4o-mini"],
 };
 
+function runMarkets(sub = "most_active") {
+  return runMarketsModule(sub, {
+    openTickerPage,
+    updateLlmContextBar,
+    clientCacheTtlMs: MARKETS_CLIENT_CACHE_TTL_MS,
+  });
+}
+
+function runDashboard() {
+  return runDashboardModule(DASHBOARD_MARKETS, {
+    clientCacheTtlMs: MARKETS_CLIENT_CACHE_TTL_MS,
+  });
+}
+
+function bindMarkets() {
+  bindMarketsModule((sub) => runMarkets(sub));
+}
+
+function bindDashboard() {
+  bindDashboardModule((sub) => openDashboardMarket(sub));
+}
+
+function initSearch() {
+  initSearchModule(openTickerPage);
+}
+
+function runTickerInfo() {
+  return runTickerInfoModule();
+}
+
+function runTickerOptions() {
+  return runTickerOptionsModule();
+}
+
+function runTickerInsider() {
+  return runTickerInsiderModule();
+}
+
 function renderMarkdown(text) {
-  if (!text || typeof marked === "undefined") return text || "";
-  return marked.parse(text, { breaks: true, gfm: true });
+  if (!text || typeof globalThis.marked === "undefined") return text || "";
+  return globalThis.marked.parse(text, { breaks: true, gfm: true });
 }
 
 async function fetchWebContext(query) {
@@ -942,219 +974,6 @@ function buildSystemPrompt() {
   return prompt;
 }
 
-async function getMarketsData(sub) {
-  const cached = state.marketsCache.get(sub);
-  if (cached && Date.now() - cached.fetchedAt < MARKETS_CLIENT_CACHE_TTL_MS) {
-    return { data: cached.data, source: "client" };
-  }
-
-  const response = await fetch(`/api/markets?sub=${encodeURIComponent(sub)}`);
-  const data = await response.json();
-  if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
-  state.marketsCache.set(sub, { fetchedAt: Date.now(), data });
-  return { data, source: "server" };
-}
-
-function renderMarkets(data, source = "server") {
-  $("#result-title").textContent = data.title;
-  renderTable(data.data);
-
-  const symbolColumn = data.data.columns.find((column) => column.toLowerCase() === "symbol");
-  const nameColumn = data.data.columns.find((column) => column.toLowerCase() === "name");
-  $$("#result-table tbody tr").forEach((tr, index) => {
-    const row = data.data.rows[index];
-    const symbol = cleanMarketSymbol(row?.[symbolColumn]);
-    const name = row?.[nameColumn]?.toString().trim() || symbol;
-    if (!symbol) return;
-    tr.style.cursor = "pointer";
-    tr.addEventListener("click", () => openTickerPage(symbol, name));
-  });
-
-  const cache = data.cache;
-  let cacheNote = "live";
-  if (source === "client") {
-    cacheNote = "client cache";
-  } else if (cache?.market_date) {
-    cacheNote = `${cache.status} cache for ${cache.market_date}`;
-  } else if (cache) {
-    cacheNote = `${cache.status} cache, ${cache.age_seconds}s old`;
-  }
-  const warning = data.warning ? ` · ${data.warning}` : "";
-  setStatus(`${data.data.rows.length} tickers · ${cacheNote}${warning}`, false);
-  if (state.llmOpen) updateLlmContextBar();
-}
-
-async function runMarkets(sub = "most_active") {
-  state.marketsSub = sub;
-  $$(".markets-tab").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.marketsSub === sub);
-  });
-
-  $(".results").classList.remove("hidden");
-  $("#summary").innerHTML = "";
-
-  $("#result-title").textContent = "Markets";
-  $("#result-table").innerHTML = "";
-  $("#result-meta").textContent = "";
-  setStatus("Loading…", false);
-
-  try {
-    const { data, source } = await getMarketsData(sub);
-    renderMarkets(data, source);
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-}
-
-async function runDashboard() {
-  $(".results").classList.add("hidden");
-  await Promise.all(DASHBOARD_MARKETS.map(loadDashboardMarket));
-  loadDashboardIndexes();
-  loadDashboardFutures();
-}
-
-async function loadDashboardMarket(item) {
-  const target = $(`#${item.id}`);
-  if (!target) return;
-  target.innerHTML = `<div class="dashboard-loading">Loading...</div>`;
-  try {
-    const { data } = await getMarketsData(item.sub);
-    renderDashboardMarket(target, data, item.sub);
-  } catch (error) {
-    target.innerHTML = `<div class="dashboard-empty">${error.message}</div>`;
-  }
-}
-
-function renderDashboardMarket(target, data, sub) {
-  const rows = data?.data?.rows || [];
-  const columns = data?.data?.columns || [];
-  const symbolColumn = columns.find((column) => column.toLowerCase() === "symbol");
-  const nameColumn = columns.find((column) => column.toLowerCase() === "name");
-  const changeColumn = columns.find((column) => column.toLowerCase() === "change %")
-    || columns.find((column) => /^change/i.test(column));
-  target.innerHTML = "";
-
-  rows.slice(0, 5).forEach((row) => {
-    const symbol = cleanMarketSymbol(row?.[symbolColumn]);
-    const name = row?.[nameColumn]?.toString().trim() || symbol;
-    const change = changeColumn ? formatValue(row?.[changeColumn]) : "";
-    const div = document.createElement("div");
-    div.className = "dashboard-mini-row";
-    div.innerHTML = `
-      <span class="dashboard-symbol"></span>
-      <span class="dashboard-name"></span>
-      <span class="dashboard-change"></span>
-    `;
-    div.querySelector(".dashboard-symbol").textContent = symbol;
-    div.querySelector(".dashboard-name").textContent = name;
-    const changeEl = div.querySelector(".dashboard-change");
-    changeEl.textContent = change;
-    const numeric = parseSignedNumber(change);
-    if (numeric !== null && numeric !== 0) {
-      changeEl.classList.add(numeric > 0 ? "value-positive" : "value-negative");
-    }
-    target.appendChild(div);
-  });
-
-  if (!target.children.length) {
-    target.innerHTML = `<div class="dashboard-empty">No rows returned.</div>`;
-  }
-}
-
-async function loadDashboardIndexes() {
-  const strip = $("#dashboard-index-strip");
-  const meta = $("#dashboard-index-meta");
-  if (!strip || !meta) return;
-  strip.innerHTML = `<div class="dashboard-loading">Loading...</div>`;
-  meta.textContent = "Loading...";
-  try {
-    const response = await fetch("/api/dashboard-indexes");
-    const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
-    renderDashboardIndexes(data);
-  } catch (error) {
-    meta.textContent = "Unavailable";
-    strip.innerHTML = `<div class="dashboard-empty">${error.message}</div>`;
-  }
-}
-
-function renderDashboardIndexes(data) {
-  const strip = $("#dashboard-index-strip");
-  const meta = $("#dashboard-index-meta");
-  strip.innerHTML = "";
-  (data.indexes || []).forEach((item) => {
-    const change = typeof item.change_pct === "number" ? item.change_pct : null;
-    const tile = document.createElement("div");
-    tile.className = "index-tile";
-    tile.innerHTML = `
-      <div class="index-name"></div>
-      <div class="index-symbol"></div>
-      <div class="index-change"></div>
-    `;
-    tile.querySelector(".index-name").textContent = item.name;
-    tile.querySelector(".index-symbol").textContent = item.symbol;
-    const changeEl = tile.querySelector(".index-change");
-    changeEl.textContent = change === null ? "—" : `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`;
-    if (change !== null && change !== 0) {
-      changeEl.classList.add(change > 0 ? "value-positive" : "value-negative");
-    }
-    strip.appendChild(tile);
-  });
-  if (!strip.children.length) {
-    strip.innerHTML = `<div class="dashboard-empty">No index data returned.</div>`;
-  }
-  const cache = data.cache;
-  meta.textContent = cache ? `${cache.status} cache, ${cache.age_seconds}s old` : "Latest close";
-}
-
-async function loadDashboardFutures() {
-  const strip = $("#dashboard-futures-strip");
-  const meta = $("#dashboard-futures-meta");
-  if (!strip || !meta) return;
-  strip.innerHTML = `<div class="dashboard-loading">Loading...</div>`;
-  meta.textContent = "Loading...";
-  try {
-    const response = await fetch("/api/dashboard-futures");
-    const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
-    renderDashboardFutures(data);
-  } catch (error) {
-    meta.textContent = "Unavailable";
-    strip.innerHTML = `<div class="dashboard-empty">${error.message}</div>`;
-  }
-}
-
-function renderDashboardFutures(data) {
-  const strip = $("#dashboard-futures-strip");
-  const meta = $("#dashboard-futures-meta");
-  strip.innerHTML = "";
-  (data.items || []).forEach((item) => {
-    const change = typeof item.change_pct === "number" ? item.change_pct : null;
-    const tile = document.createElement("div");
-    tile.className = "index-tile";
-    tile.innerHTML = `
-      <div class="index-name"></div>
-      <div class="index-symbol"></div>
-      <div class="index-price"></div>
-      <div class="index-change"></div>
-    `;
-    tile.querySelector(".index-name").textContent = item.name;
-    tile.querySelector(".index-symbol").textContent = item.symbol;
-    tile.querySelector(".index-price").textContent = item.close == null ? "—" : formatValue(item.close);
-    const changeEl = tile.querySelector(".index-change");
-    changeEl.textContent = change === null ? "—" : `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`;
-    if (change !== null && change !== 0) {
-      changeEl.classList.add(change > 0 ? "value-positive" : "value-negative");
-    }
-    strip.appendChild(tile);
-  });
-  if (!strip.children.length) {
-    strip.innerHTML = `<div class="dashboard-empty">No futures data returned.</div>`;
-  }
-  const cache = data.cache;
-  meta.textContent = cache ? `${cache.status} cache, ${cache.age_seconds}s old` : "Latest close";
-}
-
 function updateLlmContextBar() {
   const ctx = buildLlmContext();
   const text = $("#llm-ctx-text");
@@ -1217,14 +1036,11 @@ function initMarketStatus() {
   setInterval(loadMarketStatus, 5 * 60 * 1000);
 }
 
-const $ = (selector) => document.querySelector(selector);
-const $$ = (selector) => Array.from(document.querySelectorAll(selector));
-
 function routeFromPath() {
   const path = location.pathname;
   if (path.startsWith("/ticker/")) return "ticker";
   const route = path.replace("/", "") || "dashboard";
-  return ["dashboard", "chat", "markets", "multi", "watchlist", "screener", "dcf"].includes(route) ? route : "dashboard";
+  return ["dashboard", "chat", "markets", "multi", "watchlist", "screener", "option-screener", "dcf"].includes(route) ? route : "dashboard";
 }
 
 function tickerFromPath() {
@@ -1240,9 +1056,15 @@ function setRoute(route, replace = false) {
   $$(".nav a").forEach((link) => {
     link.classList.toggle("active", link.dataset.route === route);
   });
+  $$(".nav-group").forEach((group) => {
+    const parent = group.querySelector(".nav-parent");
+    if (!parent) return;
+    const routes = Array.from(group.querySelectorAll("[data-route]")).map((link) => link.dataset.route);
+    parent.classList.toggle("active", routes.includes(route));
+  });
   if (!replace && route !== "ticker") history.pushState({}, "", `/${route}`);
   if (route !== "ticker") state.tickerBackPath = null;
-  if (route === "dashboard") $(".results").classList.add("hidden");
+  $(".results").classList.toggle("hidden", route === "dashboard" || route === "option-screener");
   if (state.llmOpen) updateLlmContextBar();
 }
 
@@ -1253,10 +1075,13 @@ function openTickerPage(ticker, name) {
   state.tickerName = name || ticker;
   state.tickerMainTab = "chart";
   state.tickerView = "income_statement";
+  state.tickerFinancialsData = null;
+  state.tickerFinancialsAsPercent = false;
   state.compareTickers = [];
 
   $("#ticker-eyebrow").textContent = ticker;
   $("#ticker-heading").textContent = name || ticker;
+  renderTickerWatchlistMenu();
 
   setTickerMainTab("chart");
   history.pushState({ tickerBackPath: state.tickerBackPath }, "", `/ticker/${ticker}`);
@@ -2118,102 +1943,15 @@ function bindCompareControls() {
   });
 }
 
-// Financials tab
-async function runTickerFinancials() {
-  const ticker = state.ticker;
-  if (!ticker) return;
-  state.tickerView = $("#ticker-statement").value;
-  const quarterly = $("#ticker-period").value === "true";
-  const pivot = $("#ticker-pivot").value === "true";
-  try {
-    const data = await post("/api/ticker-financials", {
-      ticker,
-      view: state.tickerView,
-      quarterly,
-      pivot,
-    });
-    $("#result-title").textContent = data.title;
-    renderTable(data.data);
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-}
-
-// Info tab
-async function runTickerInfo() {
-  const ticker = state.ticker;
-  if (!ticker) return;
-  const body = $("#ticker-info-body");
-  body.innerHTML = `<div class="ticker-info-empty">Loading…</div>`;
-  try {
-    const res = await fetch(`/api/ticker-info?ticker=${encodeURIComponent(ticker)}`);
-    if (!res.ok) throw new Error(`Server error ${res.status}`);
-    const data = await res.json();
-    if (data.error) throw new Error(data.error);
-    renderTickerInfo(data);
-  } catch (err) {
-    body.innerHTML = `<div class="ticker-info-empty">${escapeHtml(err.message)}</div>`;
-  }
-}
-
-function renderTickerInfo(d) {
-  const body = $("#ticker-info-body");
-
-  const firstTrade = d.first_trading_day
-    ? new Date(d.first_trading_day).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })
-    : "—";
-  const isActive = d.trading_status === true || d.trading_status === "true";
-
-  const websiteHtml = d.website
-    ? `<a class="info-website" href="${escapeHtml(d.website)}" target="_blank" rel="noopener">
-         ${escapeHtml(d.website.replace(/^https?:\/\//, ""))} ↗
-       </a>`
-    : "";
-
-  const taxonomy = [d.sector, d.industry, d.country].filter(Boolean);
-
-  body.innerHTML = `
-    <div class="info-card">
-      <div class="info-header">
-        <div class="info-header-left">
-          <div class="info-company-name">${escapeHtml(d.name || d.symbol || "—")}</div>
-          <div class="info-taxonomy">
-            ${taxonomy.map((t) => `<span>${escapeHtml(t)}</span>`).join("")}
-          </div>
-        </div>
-        ${websiteHtml}
-      </div>
-
-      <div class="info-meta">
-        <div class="info-meta-item">
-          <span class="info-meta-label">Symbol</span>
-          <span class="info-meta-value">${escapeHtml(d.symbol || "—")}</span>
-        </div>
-        <div class="info-meta-item">
-          <span class="info-meta-label">Asset Type</span>
-          <span class="info-meta-value">${escapeHtml(d.asset_type || "—")}</span>
-        </div>
-        <div class="info-meta-item">
-          <span class="info-meta-label">Status</span>
-          <span class="info-meta-value ${isActive ? "status-active" : "status-inactive"}">
-            ${isActive ? "Active" : "Inactive"}
-          </span>
-        </div>
-        <div class="info-meta-item">
-          <span class="info-meta-label">First Traded</span>
-          <span class="info-meta-value">${escapeHtml(firstTrade)}</span>
-        </div>
-      </div>
-
-      ${d.business_summary ? `
-      <div>
-        <div class="info-summary-label">About</div>
-        <p class="info-summary-text">${escapeHtml(d.business_summary)}</p>
-      </div>` : ""}
-    </div>`;
-}
-
 function bindTickerPage() {
+  $("#ticker-watchlist-btn")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleTickerWatchlistMenu();
+  });
+  document.addEventListener("click", (event) => {
+    const picker = $("#ticker-watchlist-picker");
+    if (picker && !picker.contains(event.target)) closeTickerWatchlistMenu();
+  });
   // Main tab switching
   $$(".ticker-main-tab").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2221,7 +1959,9 @@ function bindTickerPage() {
       setTickerMainTab(tab);
       if (tab === "chart") runTickerChart();
       if (tab === "financials") runTickerFinancials();
+      if (tab === "options") runTickerOptions();
       if (tab === "info") runTickerInfo();
+      if (tab === "insider") runTickerInsider();
     });
   });
 
@@ -2236,120 +1976,11 @@ function bindTickerPage() {
     });
   });
 
-  // Financials controls
-  ["#ticker-statement", "#ticker-period", "#ticker-pivot"].forEach((sel) => {
-    $(sel).addEventListener("change", () => {
-      if (state.route === "ticker" && state.tickerMainTab === "financials")
-        runTickerFinancials();
-    });
-  });
-}
-
-// ── Search bar ─────────────────────────────────────────────
-function initSearch() {
-  const input = $("#search-input");
-  const dropdown = $("#search-dropdown");
-  let focusedIndex = -1;
-  let debounceTimer = null;
-  let lastQuery = "";
-
-  function getItems() {
-    return Array.from(dropdown.querySelectorAll(".search-item"));
-  }
-
-  function setFocused(index) {
-    const items = getItems();
-    items.forEach((item, i) => item.classList.toggle("focused", i === index));
-    focusedIndex = index;
-  }
-
-  function closeDropdown() {
-    dropdown.classList.remove("open");
-    focusedIndex = -1;
-  }
-
-  function openDropdown() {
-    if (dropdown.children.length > 0) dropdown.classList.add("open");
-  }
-
-  async function search(q) {
-    if (q === lastQuery) return;
-    lastQuery = q;
-
-    if (!q.trim()) {
-      dropdown.innerHTML = "";
-      closeDropdown();
-      return;
-    }
-
-    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    const results = await res.json();
-
-    dropdown.innerHTML = "";
-    focusedIndex = -1;
-
-    if (!results.length) {
-      const empty = document.createElement("li");
-      empty.className = "search-empty";
-      empty.textContent = "No matches";
-      dropdown.appendChild(empty);
-    } else {
-      results.forEach(({ ticker, name }) => {
-        const li = document.createElement("li");
-        li.className = "search-item";
-        li.setAttribute("role", "option");
-        li.innerHTML = `<span class="search-item-ticker">${escapeHtml(ticker)}</span><span class="search-item-name">${escapeHtml(name)}</span>`;
-        li.addEventListener("mousedown", (e) => {
-          e.preventDefault();
-          selectResult(ticker, name);
-        });
-        dropdown.appendChild(li);
-      });
-    }
-    openDropdown();
-  }
-
-  function selectResult(ticker, name) {
-    input.value = "";
-    lastQuery = "";
-    dropdown.innerHTML = "";
-    closeDropdown();
-    openTickerPage(ticker, name);
-  }
-
-  input.addEventListener("input", () => {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => search(input.value.trim()), 150);
+  $("#ticker-options-fetch-dte")?.addEventListener("change", () => {
+    if (state.route === "ticker" && state.tickerMainTab === "options") runTickerOptions();
   });
 
-  input.addEventListener("focus", () => {
-    if (dropdown.children.length > 0) openDropdown();
-  });
-
-  input.addEventListener("blur", () => {
-    setTimeout(closeDropdown, 150);
-  });
-
-  input.addEventListener("keydown", (e) => {
-    const items = getItems().filter((item) => item.classList.contains("search-item"));
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setFocused(Math.min(focusedIndex + 1, items.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setFocused(Math.max(focusedIndex - 1, 0));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (focusedIndex >= 0 && items[focusedIndex]) {
-        const ticker = items[focusedIndex].querySelector(".search-item-ticker").textContent;
-        const name = items[focusedIndex].querySelector(".search-item-name").textContent;
-        selectResult(ticker, name);
-      }
-    } else if (e.key === "Escape") {
-      closeDropdown();
-      input.blur();
-    }
-  });
+  bindTickerFinancialsControls();
 }
 
 function formValue(form, name) {
@@ -2357,164 +1988,6 @@ function formValue(form, name) {
   if (!field) return null;
   if (field.type === "checkbox") return field.checked;
   return field.value;
-}
-
-function tickerList(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim().toUpperCase()).filter(Boolean);
-  return value
-    .split(/[\s,]+/)
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
-}
-
-function uniqueTickers(tickers) {
-  return Array.from(new Set(tickerList(tickers)));
-}
-
-async function post(path, payload) {
-  $(".results").classList.remove("hidden");
-  setStatus("Working. SEC and market data calls can take a bit.", false);
-  $("#result-table").innerHTML = "";
-  $("#summary").innerHTML = "";
-  $("#result-meta").textContent = "";
-
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await response.json();
-  if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
-  return data;
-}
-
-function setStatus(message, error = false) {
-  const status = $("#status");
-  status.textContent = message;
-  status.classList.toggle("error", error);
-}
-
-function renderTable(data) {
-  const table = $("#result-table");
-  table.innerHTML = "";
-  if (!data || !data.columns || !data.rows || data.rows.length === 0) {
-    setStatus("No rows returned.", false);
-    return;
-  }
-
-  // Drop the ticker column when all rows share the same ticker (single-ticker views).
-  let columns = data.columns;
-  if (columns.includes("ticker")) {
-    const values = new Set(data.rows.map((row) => row["ticker"]));
-    if (values.size <= 1) columns = columns.filter((c) => c !== "ticker");
-  }
-
-  const thead = document.createElement("thead");
-  const headerRow = document.createElement("tr");
-  columns.forEach((column) => {
-    const th = document.createElement("th");
-    th.textContent = column;
-    headerRow.appendChild(th);
-  });
-  thead.appendChild(headerRow);
-
-  const tbody = document.createElement("tbody");
-  data.rows.forEach((row) => {
-    const tr = document.createElement("tr");
-    columns.forEach((column) => {
-      const td = document.createElement("td");
-      td.textContent = formatTableCell(column, row[column]);
-      applyDirectionalCellClass(td, column, row[column]);
-      tr.appendChild(td);
-    });
-    tbody.appendChild(tr);
-  });
-
-  table.append(thead, tbody);
-  $("#result-meta").textContent = `${data.height} rows · ${data.width} columns`;
-  setStatus("Done.", false);
-}
-
-function formatTableCell(column, value) {
-  if (String(column).trim().toLowerCase() === "symbol") {
-    return cleanMarketSymbol(value);
-  }
-  if (String(column).trim().toLowerCase() === "price") {
-    return stripInlinePriceChange(value);
-  }
-  return formatValue(value);
-}
-
-function cleanMarketSymbol(value) {
-  const formatted = formatValue(value).trim();
-  const parts = formatted.split(/\s+/);
-  if (parts.length >= 2 && parts[0].length === 1) return parts[1];
-  return parts[0] || "";
-}
-
-function stripInlinePriceChange(value) {
-  const formatted = formatValue(value);
-  const match = formatted.match(/^\s*([+-]?\d[\d,]*(?:\.\d+)?)/);
-  return match ? match[1] : formatted;
-}
-
-function applyDirectionalCellClass(td, column, value) {
-  if (!isDirectionalColumn(column)) return;
-  const numeric = parseSignedNumber(value);
-  if (numeric === null || numeric === 0) return;
-  td.classList.add(numeric > 0 ? "value-positive" : "value-negative");
-}
-
-function isDirectionalColumn(column) {
-  return /^change\b/i.test(String(column).trim());
-}
-
-function parseSignedNumber(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (value === null || value === undefined) return null;
-  const match = String(value).replace(/,/g, "").match(/[+-]?\d+(?:\.\d+)?/);
-  return match ? Number(match[0]) : null;
-}
-
-function formatValue(value) {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return String(value);
-    if (Math.abs(value) >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)}B`;
-    if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-    if (Math.abs(value) >= 1_000) return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
-    return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
-  }
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-function renderSummary(summary) {
-  const target = $("#summary");
-  target.innerHTML = "";
-  if (!summary) return;
-
-  const metrics = [
-    ["Ticker", summary.ticker],
-    ["Intrinsic / share", summary.intrinsic_value_per_share],
-    ["Enterprise value", summary.enterprise_value],
-    ["Base FCF", summary.base_fcf],
-    ["Growth rate", rate(summary.assumptions?.stage1_growth_rate)],
-    ["Discount rate", rate(summary.assumptions?.discount_rate)],
-    ["Terminal growth", rate(summary.assumptions?.terminal_growth_rate)],
-    ["Warnings", summary.warnings?.length || 0],
-  ];
-
-  metrics.forEach(([label, value]) => {
-    const item = document.createElement("div");
-    item.className = "metric";
-    item.innerHTML = `<span>${label}</span><strong>${formatValue(value)}</strong>`;
-    target.appendChild(item);
-  });
-}
-
-function rate(value) {
-  return typeof value === "number" ? `${(value * 100).toFixed(2)}%` : value;
 }
 
 function addFilter(metric = "pe_ratio", op = "<", value = 30) {
@@ -2554,10 +2027,14 @@ function loadWatchlists() {
   } catch {
     state.watchlists = [];
   }
+  renderTickerWatchlistMenu();
+  renderOptionScreenerWatchlists();
 }
 
 function saveWatchlists() {
   localStorage.setItem("secrs.watchlists", JSON.stringify(state.watchlists));
+  renderTickerWatchlistMenu();
+  renderOptionScreenerWatchlists();
 }
 
 function renderWatchlists() {
@@ -2608,6 +2085,78 @@ function renderWatchlists() {
   });
 }
 
+function renderTickerWatchlistMenu() {
+  const menu = $("#ticker-watchlist-menu");
+  if (!menu) return;
+
+  const ticker = state.ticker;
+  if (!ticker) {
+    menu.innerHTML = `<div class="ticker-watchlist-empty">Select a ticker first.</div>`;
+    return;
+  }
+
+  if (state.watchlists.length === 0) {
+    menu.innerHTML = `<div class="ticker-watchlist-empty">No watchlists yet.</div>`;
+    return;
+  }
+
+  menu.innerHTML = "";
+  state.watchlists.forEach((watchlist) => {
+    const exists = Array.isArray(watchlist.tickers) && watchlist.tickers.includes(ticker);
+    const item = document.createElement("button");
+    item.className = "ticker-watchlist-item";
+    item.type = "button";
+    item.disabled = exists;
+    item.innerHTML = `
+      <span class="ticker-watchlist-name">${escapeHtml(watchlist.name)}</span>
+      <span class="ticker-watchlist-check">${exists ? "✓" : ""}</span>
+    `;
+    if (!exists) {
+      item.addEventListener("click", () => {
+        addTickerToWatchlist(watchlist.id, ticker);
+        closeTickerWatchlistMenu();
+      });
+    }
+    menu.appendChild(item);
+  });
+}
+
+function addTickerToWatchlist(id, ticker) {
+  const watchlist = state.watchlists.find((item) => item.id === id);
+  if (!watchlist) return;
+  const current = Array.isArray(watchlist.tickers) ? watchlist.tickers : [];
+  const cleaned = uniqueTickers([...current, ticker]);
+  if (cleaned.length === current.length) return;
+  watchlist.tickers = cleaned;
+  saveWatchlists();
+  renderWatchlists();
+  setStatus(`${ticker} added to ${watchlist.name}.`, false);
+}
+
+function openTickerWatchlistMenu() {
+  const menu = $("#ticker-watchlist-menu");
+  const btn = $("#ticker-watchlist-btn");
+  if (!menu || !btn) return;
+  renderTickerWatchlistMenu();
+  menu.classList.remove("hidden");
+  btn.setAttribute("aria-expanded", "true");
+}
+
+function closeTickerWatchlistMenu() {
+  const menu = $("#ticker-watchlist-menu");
+  const btn = $("#ticker-watchlist-btn");
+  if (!menu || !btn) return;
+  menu.classList.add("hidden");
+  btn.setAttribute("aria-expanded", "false");
+}
+
+function toggleTickerWatchlistMenu() {
+  const menu = $("#ticker-watchlist-menu");
+  if (!menu) return;
+  if (menu.classList.contains("hidden")) openTickerWatchlistMenu();
+  else closeTickerWatchlistMenu();
+}
+
 function toggleWatchlist(id) {
   if (state.expandedWatchlists.has(id)) {
     state.expandedWatchlists.delete(id);
@@ -2615,14 +2164,6 @@ function toggleWatchlist(id) {
     state.expandedWatchlists.add(id);
   }
   renderWatchlists();
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
 }
 
 function upsertWatchlist(name, tickers) {
@@ -2804,21 +2345,9 @@ function bindForms() {
   });
 }
 
-function bindMarkets() {
-  $$(".markets-tab").forEach((btn) => {
-    btn.addEventListener("click", () => runMarkets(btn.dataset.marketsSub));
-  });
-}
-
 function openDashboardMarket(sub) {
   setRoute("markets");
   runMarkets(sub);
-}
-
-function bindDashboard() {
-  $$("[data-dashboard-market]").forEach((card) => {
-    card.addEventListener("click", () => openDashboardMarket(card.dataset.dashboardMarket));
-  });
 }
 
 function bindNavigation() {
@@ -3075,6 +2604,7 @@ loadOptions().then(() => {
   loadWatchlists();
   bindNavigation();
   bindForms();
+  bindOptionScreener();
   bindDashboard();
   bindMarkets();
   bindTickerPage();
@@ -3094,6 +2624,7 @@ loadOptions().then(() => {
       state.tickerName = ticker;
       $("#ticker-eyebrow").textContent = ticker;
       $("#ticker-heading").textContent = ticker;
+      renderTickerWatchlistMenu();
       setTickerMainTab("chart");
       setRoute("ticker", true);
       runTickerChart();
@@ -3117,10 +2648,13 @@ loadOptions().then(() => {
         state.ticker = ticker;
         $("#ticker-eyebrow").textContent = ticker;
         $("#ticker-heading").textContent = ticker;
+        renderTickerWatchlistMenu();
         setTickerMainTab(state.tickerMainTab || "chart");
         setRoute("ticker", true);
         if (state.tickerMainTab === "financials") runTickerFinancials();
+        else if (state.tickerMainTab === "options") runTickerOptions();
         else if (state.tickerMainTab === "info") runTickerInfo();
+        else if (state.tickerMainTab === "insider") runTickerInsider();
         else runTickerChart();
       }
     } else {

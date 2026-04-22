@@ -79,9 +79,12 @@ body {
   justify-content: flex-end;
 }
 
-.nav a {
+.nav a,
+.nav-parent {
   border: 1px solid transparent;
+  background: transparent;
   color: var(--text-3);
+  cursor: pointer;
   font-family: 'Syne', sans-serif;
   font-size: 10px;
   font-weight: 700;
@@ -93,7 +96,9 @@ body {
 }
 
 .nav a.active,
-.nav a:hover {
+.nav a:hover,
+.nav-parent.active,
+.nav-parent:hover {
   border-color: var(--border-hi);
   color: var(--accent);
 }
@@ -101,6 +106,44 @@ body {
 .nav a.active {
   border-bottom-color: var(--accent);
   color: var(--accent);
+}
+
+.nav-parent.active {
+  border-bottom-color: var(--accent);
+  color: var(--accent);
+}
+
+.nav-group {
+  position: relative;
+  display: inline-flex;
+}
+
+.nav-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 100;
+  background: var(--surface);
+  border: 1px solid var(--border-hi);
+  min-width: 210px;
+  padding: 4px 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.nav-group:hover .nav-menu {
+  display: block;
+}
+
+.nav-menu a {
+  display: block;
+  width: 100%;
+  border: none;
+  padding: 8px 12px;
+}
+
+.nav-menu a.active {
+  border-bottom-color: transparent;
 }
 
 /* ─── Search bar ────────────────────────────────── */
@@ -208,6 +251,69 @@ body {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.ticker-watchlist-picker {
+  position: relative;
+}
+
+.ticker-watchlist-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 260px;
+  background: var(--surface);
+  border: 1px solid var(--border-hi);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  padding: 8px;
+  z-index: 30;
+}
+
+.ticker-watchlist-menu.hidden {
+  display: none;
+}
+
+.ticker-watchlist-empty {
+  color: var(--text-2);
+  font-size: 11px;
+  padding: 8px 10px;
+}
+
+.ticker-watchlist-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  font: inherit;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ticker-watchlist-item:hover:not(:disabled) {
+  border-color: var(--border-hi);
+  background: var(--surface-2);
+}
+
+.ticker-watchlist-item:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.ticker-watchlist-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticker-watchlist-check {
+  color: var(--success);
+  font-weight: 700;
+  flex-shrink: 0;
 }
 
 /* Top-level tabs: Chart / Financials / Info */
@@ -841,6 +947,73 @@ body {
   min-width: 160px;
 }
 
+.ticker-financials-toggle {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.ticker-financials-toggle.hidden {
+  display: none;
+}
+
+.ticker-financials-toggle-label {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.ticker-financials-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ticker-financials-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ticker-financials-slider {
+  width: 44px;
+  height: 24px;
+  border: 1px solid var(--border-hi);
+  background: var(--surface);
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  cursor: pointer;
+  position: relative;
+}
+
+.ticker-financials-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: var(--text-2);
+  transition: transform 0.15s, background 0.15s;
+}
+
+.ticker-financials-switch input:checked + .ticker-financials-slider {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+.ticker-financials-switch input:checked + .ticker-financials-slider::after {
+  transform: translateX(20px);
+  background: var(--accent);
+}
+
+.ticker-financials-switch input:focus-visible + .ticker-financials-slider {
+  box-shadow: 0 0 0 1px var(--accent-glow) inset;
+}
+
 /* Results visibility toggle */
 .results.hidden {
   display: none;
@@ -1001,6 +1174,10 @@ h2 {
 
 .screener-grid {
   grid-template-columns: repeat(5, minmax(130px, 1fr));
+}
+
+.option-screener-results {
+  display: block;
 }
 
 /* ─── Labels / inputs ───────────────────────────── */
@@ -2401,4 +2578,155 @@ body:has(#chat-page.active) .llm-btn {
   height: 34px;
   width: 34px;
   border-radius: 6px;
+}
+
+/* Insider Trades tab */
+.insider-table-wrap {
+  overflow-x: auto;
+  padding: 1rem;
+}
+
+.insider-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  font-family: var(--font-mono, monospace);
+}
+
+.insider-table th {
+  text-align: left;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid #333;
+  color: #888;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.insider-table td {
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid #1a1a1a;
+  white-space: nowrap;
+}
+
+.insider-table tbody tr:hover {
+  background: #111;
+}
+
+.insider-type {
+  display: inline-block;
+  padding: 0.15rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.insider-buy {
+  background: rgba(0, 200, 100, 0.15);
+  color: #00c864;
+}
+
+.insider-sell {
+  background: rgba(255, 75, 75, 0.15);
+  color: #ff4b4b;
+}
+
+.insider-filter-bar {
+  padding: 0.75rem 1rem 0;
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.insider-filter-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #888;
+}
+
+.insider-filter-label select {
+  background: #111;
+  color: #e0e0e0;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.insider-filter-label select:focus {
+  outline: none;
+  border-color: #555;
+}
+
+.insider-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-family: var(--font-mono, monospace);
+}
+
+.insider-summary-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.insider-summary-label {
+  color: #888;
+}
+
+.insider-summary-value {
+  font-weight: 600;
+  color: #e0e0e0;
+}
+
+.insider-summary-pos { color: #00c864; }
+.insider-summary-neg { color: #ff4b4b; }
+
+.insider-summary-sep {
+  width: 1px;
+  height: 1rem;
+  background: #333;
+}
+
+/* Markets page — Insider Trades hover dropdown */
+.markets-tab-group {
+  position: relative;
+  display: inline-flex;
+}
+
+.markets-tab-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 100;
+  background: #0d0d0d;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  padding: 0.25rem 0;
+  min-width: 100%;
+  white-space: nowrap;
+}
+
+.markets-tab-group:hover .markets-tab-menu {
+  display: block;
+}
+
+.markets-tab-menu .markets-tab {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border-radius: 0;
+  border: none;
+  padding: 0.4rem 0.85rem;
+}
+
+.markets-tab-menu .markets-tab:hover {
+  background: #1a1a1a;
 }

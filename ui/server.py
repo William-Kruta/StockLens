@@ -20,16 +20,18 @@ from zoneinfo import ZoneInfo
 import polars as pl
 import pandas as pd
 
+from insidertracker import InsiderTracker
 from secrs.dcf import batch_dcf, dcf
 from secrs.modules.margins import _calculate_margin_table
 from secrs.modules.ratios import _calculate_ratio_table
-from secrs.periphery.revenues import get_revenue_by_region
+from secrs.periphery.revenues import get_revenue_by_region, get_revenue_by_segment
 from secrs.screener import _METRIC_GROUP, screen_tickers
 from secrs.ticker import Ticker, Tickers
 from secrs.utils.stale import _get_us_market_holidays
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+MODULES_DIR = Path(__file__).parent / "modules"
 PAGE_ROUTES = {
     "/",
     "/chat",
@@ -38,6 +40,7 @@ PAGE_ROUTES = {
     "/multi",
     "/watchlist",
     "/screener",
+    "/option-screener",
     "/dcf",
 }
 
@@ -525,6 +528,8 @@ def _single(payload: dict) -> dict:
         df = Tickers().get_cash_flows([ticker_symbol], quarterly=quarterly, pivot=pivot)
     elif view == "regions":
         df = get_revenue_by_region(ticker_symbol, quarterly=quarterly)
+    elif view == "segments":
+        df = get_revenue_by_segment(ticker_symbol, quarterly=quarterly)
     else:
         raise ValueError(f"Unsupported single ticker view: {view}")
 
@@ -766,6 +771,274 @@ def _ticker_info(ticker: str) -> dict:
         else:
             result[k] = v
     return result
+
+
+def _insider_trades(ticker: str) -> dict:
+    tracker = InsiderTracker()
+    df = tracker.ticker.get_insider_trades(ticker)
+    df = df.with_columns([
+        pl.col("filing_date").dt.strftime("%Y-%m-%d").alias("filing_date"),
+        pl.col("trade_date").cast(pl.Utf8).alias("trade_date"),
+    ])
+    return {"rows": df.to_dicts()}
+
+
+def _ticker_options(ticker: str, max_dte: int | None = 30) -> dict:
+    return _options_chain([ticker], max_dte=max_dte)
+
+
+def _ticker_expirations_within_dte(ticker: str, max_dte: int | None) -> list[str]:
+    import yfinance as yf
+
+    if max_dte is None:
+        return []
+
+    today = dt.date.today()
+    expirations = []
+    for exp in yf.Ticker(ticker).options:
+        try:
+            exp_date = dt.date.fromisoformat(exp)
+        except ValueError:
+            continue
+        dte = (exp_date - today).days
+        if 0 <= dte <= max_dte:
+            expirations.append(exp)
+    return expirations
+
+
+def _fetch_options_chain_df(
+    tickers: list[str], max_dte: int | None = 30
+) -> tuple[pl.DataFrame, list[str], list[str]]:
+    from yahoors.modules.options import Options
+
+    if not tickers:
+        raise ValueError("Enter at least one ticker.")
+
+    options = Options()
+    frames: list[pl.DataFrame] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+    for ticker in tickers:
+        try:
+            expirations = _ticker_expirations_within_dte(ticker, max_dte)
+            if max_dte is not None and not expirations:
+                skipped.append(ticker)
+                errors.append(f"{ticker}: no expirations found within {max_dte} DTE")
+                continue
+            frame = options.get_options([ticker], expirations=expirations)
+            if frame is None or frame.is_empty():
+                skipped.append(ticker)
+                continue
+            if max_dte is not None and "dte" in frame.columns:
+                frame = frame.filter((pl.col("dte") >= 0) & (pl.col("dte") <= max_dte))
+                if frame.is_empty():
+                    skipped.append(ticker)
+                    errors.append(f"{ticker}: no contracts returned within {max_dte} DTE")
+                    continue
+            frames.append(frame)
+        except Exception as exc:
+            skipped.append(ticker)
+            errors.append(f"{ticker}: {exc}")
+
+    if not frames:
+        empty = pl.DataFrame(schema={
+            "ticker": pl.Utf8,
+            "expiration": pl.Date,
+            "option_type": pl.Utf8,
+            "strike": pl.Float64,
+            "last_price": pl.Float64,
+        })
+        return empty, skipped, errors
+
+    df = pl.concat(frames, how="diagonal_relaxed")
+    return df, skipped, errors
+
+
+def _normalize_options_df(df: pl.DataFrame) -> pl.DataFrame:
+    if "last_price" in df.columns:
+        df = df.with_columns((pl.col("last_price") * 100).alias("contract_premium"))
+    if {"option_type", "strike", "stock_price"}.issubset(set(df.columns)):
+        df = df.with_columns(
+            pl.when(pl.col("option_type") == "put")
+            .then(pl.col("strike") * 100)
+            .when(pl.col("option_type") == "call")
+            .then(pl.col("stock_price") * 100)
+            .otherwise(None)
+            .alias("collateral_required")
+        )
+    if "last_price" in df.columns and "bs_price" in df.columns:
+        df = df.with_columns(
+            (pl.col("last_price") - pl.col("bs_price")).alias("bs_spread")
+        )
+    if {"contract_premium", "collateral_required"}.issubset(set(df.columns)):
+        df = df.with_columns(
+            pl.when(pl.col("collateral_required") > 0)
+            .then(pl.col("contract_premium") / pl.col("collateral_required"))
+            .otherwise(None)
+            .alias("premium_yield")
+        )
+    if {"premium_yield", "prob_profit"}.issubset(set(df.columns)):
+        df = df.with_columns(
+            (pl.col("premium_yield") * pl.col("prob_profit")).alias("pop_adjusted_yield")
+        )
+    if {"pop_adjusted_yield", "dte"}.issubset(set(df.columns)):
+        df = df.with_columns(
+            pl.when(pl.col("dte") > 0)
+            .then(pl.col("pop_adjusted_yield") * (pl.lit(365.0) / pl.col("dte")))
+            .otherwise(None)
+            .alias("annualized_pop_adjusted_yield")
+        )
+    return df
+
+
+def _options_chain(tickers: list[str], max_dte: int | None = 30) -> dict:
+    df, skipped, errors = _fetch_options_chain_df(tickers, max_dte=max_dte)
+    df = _normalize_options_df(df)
+    columns = [
+        "ticker",
+        "expiration",
+        "option_type",
+        "strike",
+        "last_price",
+        "contract_premium",
+        "collateral_required",
+        "premium_yield",
+        "pop_adjusted_yield",
+        "annualized_pop_adjusted_yield",
+        "bs_price",
+        "bs_spread",
+        "bid",
+        "ask",
+        "volume",
+        "open_interest",
+        "implied_volatility",
+        "in_the_money",
+        "dte",
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+        "prob_profit",
+        "hist_prob_profit",
+    ]
+    available = [column for column in columns if column in df.columns]
+    if not available:
+        payload = _jsonable(df)
+        if skipped:
+            payload["warning"] = f"Skipped {len(skipped)} ticker(s): {', '.join(skipped)}"
+        if errors:
+            payload["details"] = errors[:10]
+        return payload
+    df = df.select(available)
+    if "expiration" in df.columns:
+        df = df.with_columns(pl.col("expiration").cast(pl.Utf8))
+    if "option_type" in df.columns:
+        df = df.with_columns(pl.col("option_type").cast(pl.Utf8))
+    for column in [
+        "strike",
+        "last_price",
+        "contract_premium",
+        "collateral_required",
+        "premium_yield",
+        "pop_adjusted_yield",
+        "annualized_pop_adjusted_yield",
+        "bs_price",
+        "bs_spread",
+        "bid",
+        "ask",
+        "implied_volatility",
+        "delta",
+        "gamma",
+        "theta",
+        "vega",
+        "prob_profit",
+        "hist_prob_profit",
+    ]:
+        if column in df.columns:
+            df = df.with_columns(pl.col(column).round(4))
+    sort_columns = [column for column in ["expiration", "option_type", "strike"] if column in df.columns]
+    if sort_columns:
+        df = df.sort(sort_columns)
+    payload = _jsonable(df)
+    if skipped:
+        payload["warning"] = f"Skipped {len(skipped)} ticker(s): {', '.join(skipped)}"
+    if errors:
+        payload["details"] = errors[:10]
+    return payload
+
+
+def _option_screener(payload: dict) -> dict:
+    from yahoors.modules.screener import options_screener
+
+    tickers = _tickers(payload.get("tickers"))
+    raw_max_dte = payload.get("max_dte", 30)
+    max_dte = None if str(raw_max_dte).lower() == "all" else int(raw_max_dte)
+    long = bool(payload.get("long", False))
+    in_the_money = bool(payload.get("in_the_money", False))
+    min_collateral = float(payload.get("min_collateral") or 0.0)
+    raw_max_collateral = payload.get("max_collateral")
+    max_collateral = (
+        float(raw_max_collateral)
+        if raw_max_collateral not in (None, "", "null")
+        else float("inf")
+    )
+    df, skipped, errors = _fetch_options_chain_df(tickers, max_dte=max_dte)
+    screened = options_screener(
+        df,
+        min_dte=0,
+        max_dte=max_dte if max_dte is not None else 365,
+        in_the_money=in_the_money,
+        long=long,
+        min_collateral=min_collateral,
+        max_collateral=max_collateral,
+    )
+    screened = _normalize_options_df(screened)
+    result = {
+        "title": "Option Screener",
+        "data": _jsonable(screened),
+    }
+    if skipped:
+        result["warning"] = f"Skipped {len(skipped)} ticker(s): {', '.join(skipped)}"
+    if errors:
+        result["details"] = errors[:10]
+    return result
+
+
+def _insider_cluster_buys() -> dict:
+    tracker = InsiderTracker()
+    df = tracker.cluster_buys.get_cluster_buys()
+    df = df.with_columns([
+        pl.col("filing_date").dt.strftime("%Y-%m-%d").alias("filing_date"),
+        pl.col("trade_date").cast(pl.Utf8).alias("trade_date"),
+        pl.col("value").round(0).cast(pl.Int64).alias("value"),
+        pl.col("price").round(2).alias("price"),
+        pl.col("quantity").cast(pl.Int64).alias("quantity"),
+        pl.col("owned").cast(pl.Int64).alias("owned"),
+    ])
+    col_labels = {
+        "filing_date": "Filed",
+        "trade_date": "Trade Date",
+        "ticker": "Symbol",
+        "company_name": "Company",
+        "industry": "Industry",
+        "num_insiders": "# Insiders",
+        "trade_type": "Type",
+        "price": "Price",
+        "quantity": "Qty",
+        "owned": "Owned",
+        "ownership_change": "Chg %",
+        "value": "Value",
+    }
+    columns = [col_labels.get(c, c) for c in df.columns]
+    rows = [
+        {col_labels.get(k, k): v for k, v in row.items()}
+        for row in df.to_dicts()
+    ]
+    return {
+        "title": "Insider Cluster Buys",
+        "data": {"columns": columns, "rows": rows},
+        "cache": None,
+    }
 
 
 _MARKETS_URLS = {
@@ -1513,6 +1786,7 @@ API_HANDLERS = {
     "/api/ticker-financials": _single,
     "/api/multi": _multi,
     "/api/screener": _screener,
+    "/api/option-screener": _option_screener,
     "/api/dcf": _dcf,
     "/api/watchlist/csv": _watchlist_csv,
     "/api/candles": _candles,
@@ -1541,6 +1815,32 @@ class UIHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self._send_json(_ticker_info(ticker))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if path == "/api/insider-trades":
+            ticker = parse_qs(parsed.query).get("ticker", [""])[0].strip().upper()
+            if not ticker:
+                self._send_json(
+                    {"error": "ticker required"}, status=HTTPStatus.BAD_REQUEST
+                )
+                return
+            try:
+                self._send_json(_insider_trades(ticker))
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        if path == "/api/ticker-options":
+            ticker = parse_qs(parsed.query).get("ticker", [""])[0].strip().upper()
+            raw_max_dte = parse_qs(parsed.query).get("max_dte", ["30"])[0]
+            if not ticker:
+                self._send_json(
+                    {"error": "ticker required"}, status=HTTPStatus.BAD_REQUEST
+                )
+                return
+            try:
+                max_dte = None if str(raw_max_dte).lower() == "all" else int(raw_max_dte)
+                self._send_json(_ticker_options(ticker, max_dte=max_dte))
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -1577,7 +1877,10 @@ class UIHandler(BaseHTTPRequestHandler):
         if path == "/api/markets":
             sub = parse_qs(parsed.query).get("sub", ["most_active"])[0]
             try:
-                self._send_json(_markets(sub))
+                if sub == "insider_cluster_buys":
+                    self._send_json(_insider_cluster_buys())
+                else:
+                    self._send_json(_markets(sub))
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -1592,6 +1895,14 @@ class UIHandler(BaseHTTPRequestHandler):
                     mimetypes.guess_type(static_path)[0] or "application/octet-stream"
                 )
                 self._send_file(static_path, content_type)
+                return
+        module_path = (MODULES_DIR / path.removeprefix("/modules/")).resolve()
+        if path.startswith("/modules/") and module_path.is_relative_to(MODULES_DIR):
+            if module_path.is_file():
+                content_type = (
+                    mimetypes.guess_type(module_path)[0] or "application/octet-stream"
+                )
+                self._send_file(module_path, content_type)
                 return
         self.send_error(HTTPStatus.NOT_FOUND, "Not found")
 
