@@ -7,9 +7,16 @@ import {
   cleanMarketSymbol,
   parseSignedNumber,
 } from "/modules/table.js";
+import { runMacroMarket, setMacroShellVisible } from "/modules/macroMarkets.js";
 
 export async function runMarkets(sub, options) {
-  const { openTickerPage, updateLlmContextBar, clientCacheTtlMs } = options;
+  const { openTickerPage, updateLlmContextBar, clientCacheTtlMs, macroTab } = options;
+  if (sub === "macro") {
+    return runMacroMarket(macroTab || state.marketsMacroTab || "gdp", {
+      clientCacheTtlMs,
+    });
+  }
+  setMacroShellVisible(false);
   state.marketsSub = sub;
   $$(".markets-tab").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.marketsSub === sub);

@@ -12,6 +12,15 @@ import {
   runDashboard as runDashboardModule,
   runMarkets as runMarketsModule,
 } from "/modules/markets.js";
+import {
+  bindMacroMarkets as bindMacroMarketsModule,
+  setMacroShellVisible as setMacroShellVisibleModule,
+} from "/modules/macroMarkets.js";
+import {
+  bindPredictionMarkets as bindPredictionMarketsModule,
+  runPredictionMarkets as runPredictionMarketsModule,
+  setPredictionShellVisible as setPredictionShellVisibleModule,
+} from "/modules/predictionMarkets.js";
 import { initSearch as initSearchModule } from "/modules/search.js";
 import {
   bindOptionScreener,
@@ -21,26 +30,30 @@ import {
   runTickerOptions as runTickerOptionsModule,
   runTickerInfo as runTickerInfoModule,
   runTickerInsider as runTickerInsiderModule,
+  runCryptoAddresses as runCryptoAddressesModule,
 } from "/modules/tickerDetails.js";
+import { runTickerEarnings as runTickerEarningsModule } from "/modules/tickerEarnings.js";
+import { runTickerDividends as runTickerDividendsModule } from "/modules/tickerDividends.js";
+import { runEtfHoldings as runEtfHoldingsModule } from "/modules/etfHoldings.js";
 import { escapeHtml, tickerList, uniqueTickers } from "/modules/utils.js";
 
 // Color + group metadata for each indicator key
 const INDICATOR_DEFS = {
-  sma_20:  { color: "#4FC3F7", group: "overlay" },
-  sma_50:  { color: "#FFB800", group: "overlay" },
+  sma_20: { color: "#4FC3F7", group: "overlay" },
+  sma_50: { color: "#FFB800", group: "overlay" },
   sma_200: { color: "#FF4B4B", group: "overlay" },
-  ema_12:  { color: "#00E5A0", group: "overlay" },
-  ema_26:  { color: "#FF8A65", group: "overlay" },
-  bb:      { color: "#B388FF", group: "overlay" },
-  macd:    { color: "#4FC3F7", group: "panel"   },
-  rsi:     { color: "#C8FF00", group: "panel"   },
-  atr:     { color: "#FFB800", group: "panel"   },
+  ema_12: { color: "#00E5A0", group: "overlay" },
+  ema_26: { color: "#FF8A65", group: "overlay" },
+  bb: { color: "#B388FF", group: "overlay" },
+  macd: { color: "#4FC3F7", group: "panel" },
+  rsi: { color: "#C8FF00", group: "panel" },
+  atr: { color: "#FFB800", group: "panel" },
 };
 const COMPARE_COLORS = ["#4FC3F7", "#FFB800", "#FF4B4B", "#00E5A0", "#FF8A65", "#B388FF"];
 const DASHBOARD_MARKETS = [
-  { sub: "gainers", id: "dashboard-gainers" },
-  { sub: "losers", id: "dashboard-losers" },
-  { sub: "unusual_volume", id: "dashboard-unusual-volume" },
+  { sub: "gainers", id: "dashboard-gainers", label: "Gainers" },
+  { sub: "losers", id: "dashboard-losers", label: "Losers" },
+  { sub: "unusual_volume", id: "dashboard-unusual-volume", label: "Unusual Volume" },
 ];
 
 // ── LLM Sidebar ────────────────────────────────────────────────
@@ -61,16 +74,70 @@ function saveLlmSettings(url) {
 
 const CHAT_STORAGE_KEY = "secrs.chat.conversations";
 const CHAT_SETTINGS_KEY = "secrs.chat.settings";
+const CHAT_RESEARCH_EFFORT_KEY = "secrs.chat.research_effort";
 const CHAT_MODELS = {
   claude: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"],
   openai: ["gpt-4o", "gpt-4o-mini"],
 };
+const CHAT_COMMANDS = [
+  {
+    key: "tickers",
+    token: "@tickers/",
+    label: "Ticker context",
+    hint: "@tickers/AAPL",
+    description: "Inject ticker metadata into the prompt.",
+  },
+];
+const CHAT_MARKET_COMMANDS = [
+  { token: "@markets/most_active", label: "Markets · Most Active", hint: "@markets/most_active" },
+  { token: "@markets/gainers", label: "Markets · Top Gainers", hint: "@markets/gainers" },
+  { token: "@markets/losers", label: "Markets · Top Losers", hint: "@markets/losers" },
+  { token: "@markets/trending", label: "Markets · Trending", hint: "@markets/trending" },
+  { token: "@markets/unusual_volume", label: "Markets · Unusual Volume", hint: "@markets/unusual_volume" },
+  { token: "@markets/small_cap", label: "Markets · Small Cap", hint: "@markets/small_cap" },
+  { token: "@markets/ipo", label: "Markets · IPO", hint: "@markets/ipo" },
+  { token: "@markets/private_companies", label: "Markets · Private Companies", hint: "@markets/private_companies" },
+  { token: "@markets/insider_cluster_buys", label: "Markets · Insider Cluster Buys", hint: "@markets/insider_cluster_buys" },
+  { token: "@markets/macro/gdp", label: "Markets · Macro · GDP", hint: "@markets/macro/gdp" },
+  { token: "@markets/macro/cpi", label: "Markets · Macro · CPI", hint: "@markets/macro/cpi" },
+  { token: "@markets/macro/pce", label: "Markets · Macro · PCE", hint: "@markets/macro/pce" },
+  { token: "@markets/macro/labor", label: "Markets · Macro · Labor", hint: "@markets/macro/labor" },
+  { token: "@markets/macro/unemployment", label: "Markets · Macro · Unemployment", hint: "@markets/macro/unemployment" },
+  { token: "@markets/macro/treasury", label: "Markets · Macro · Treasury", hint: "@markets/macro/treasury" },
+  { token: "@markets/macro/fed_funds", label: "Markets · Macro · Fed Funds", hint: "@markets/macro/fed_funds" },
+  { token: "@markets/macro/credit", label: "Markets · Macro · Credit", hint: "@markets/macro/credit" },
+  { token: "@markets/macro/liquidity", label: "Markets · Macro · Liquidity", hint: "@markets/macro/liquidity" },
+  { token: "@markets/macro/housing", label: "Markets · Macro · Housing", hint: "@markets/macro/housing" },
+  { token: "@markets/macro/consumer", label: "Markets · Macro · Consumer", hint: "@markets/macro/consumer" },
+  { token: "@markets/prediction/all", label: "Prediction Markets · All", hint: "@markets/prediction/all" },
+  { token: "@markets/prediction/sports", label: "Prediction Markets · Sports", hint: "@markets/prediction/sports" },
+  { token: "@markets/prediction/crypto", label: "Prediction Markets · Crypto", hint: "@markets/prediction/crypto" },
+  { token: "@markets/prediction/politics", label: "Prediction Markets · Politics", hint: "@markets/prediction/politics" },
+  { token: "@markets/prediction/economics", label: "Prediction Markets · Economics", hint: "@markets/prediction/economics" },
+  { token: "@markets/prediction/weather", label: "Prediction Markets · Weather", hint: "@markets/prediction/weather" },
+  { token: "@markets/prediction/technology", label: "Prediction Markets · Technology", hint: "@markets/prediction/technology" },
+  { token: "@markets/prediction/entertainment", label: "Prediction Markets · Entertainment", hint: "@markets/prediction/entertainment" },
+  { token: "@markets/prediction/energy", label: "Prediction Markets · Energy", hint: "@markets/prediction/energy" },
+  { token: "@markets/prediction/other", label: "Prediction Markets · Other", hint: "@markets/prediction/other" },
+];
+const CHAT_AUTOCOMPLETE_LIMIT = 8;
 
-function runMarkets(sub = "most_active") {
+function runMarkets(sub = "most_active", macroTab = null) {
+  if (sub === "prediction") {
+    setMacroShellVisibleModule(false);
+    setPredictionShellVisibleModule(true);
+    return runPredictionMarketsModule(normalizePredictionTab(macroTab || state.marketsPredictionTab || "all"), {
+      openTickerPage,
+      updateLlmContextBar,
+      clientCacheTtlMs: MARKETS_CLIENT_CACHE_TTL_MS,
+    });
+  }
+  setPredictionShellVisibleModule(false);
   return runMarketsModule(sub, {
     openTickerPage,
     updateLlmContextBar,
     clientCacheTtlMs: MARKETS_CLIENT_CACHE_TTL_MS,
+    macroTab,
   });
 }
 
@@ -84,8 +151,24 @@ function bindMarkets() {
   bindMarketsModule((sub) => runMarkets(sub));
 }
 
+function bindMacroMarkets() {
+  bindMacroMarketsModule((tab) => openMarkets("macro", false, tab));
+}
+
+function bindPredictionMarkets() {
+  bindPredictionMarketsModule();
+}
+
 function bindDashboard() {
   bindDashboardModule((sub) => openDashboardMarket(sub));
+
+  // ✦ Quick-ask buttons on each dashboard card
+  $$("[data-dashboard-llm]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation(); // don't trigger the card's own click
+      sendDashboardLlmQuery(btn.dataset.dashboardLlm);
+    });
+  });
 }
 
 function initSearch() {
@@ -100,13 +183,520 @@ function runTickerOptions() {
   return runTickerOptionsModule();
 }
 
+function runTickerEarnings() {
+  return runTickerEarningsModule();
+}
+
+function runTickerDividends() {
+  return runTickerDividendsModule();
+}
+
+function runTickerHoldings() {
+  return runEtfHoldingsModule();
+}
+
 function runTickerInsider() {
   return runTickerInsiderModule();
+}
+
+function runCryptoAddresses() {
+  return runCryptoAddressesModule();
+}
+
+function runPredictionMarkets(tab = "all", options = {}) {
+  return runPredictionMarketsModule(tab, {
+    clientCacheTtlMs: MARKETS_CLIENT_CACHE_TTL_MS,
+    ...options,
+  });
+}
+
+function clearChartAnalysis() {
+  state.chartAnalysis = null;
+  state.chartAnalysisSelectedIndex = 0;
+  const panel = $("#chart-analysis-panel");
+  const body = $("#chart-analysis-body");
+  const meta = $("#chart-analysis-meta");
+  if (panel) panel.classList.add("hidden");
+  if (body) body.innerHTML = `<div class="chart-empty">Run analysis to detect patterns and fetch context.</div>`;
+  if (meta) meta.textContent = "";
+}
+
+function currentChartLookback() {
+  const raw = Number(state.chartLiveLookback);
+  if (!Number.isFinite(raw)) return 60;
+  return Math.min(500, Math.max(10, Math.floor(raw)));
+}
+
+function syncLiveLookbackInput() {
+  const row = $("#chart-live-lookback-row");
+  const input = $("#chart-live-lookback");
+  const show = Boolean(state.chartLive || state.chartLivePendingStart);
+  if (row) row.classList.toggle("hidden", !show);
+  if (input) input.value = String(currentChartLookback());
+}
+
+function periodDisplayLabel(period) {
+  const normalized = String(period || "").toLowerCase();
+  const labels = {
+    "1d": "1 day",
+    "5d": "5 day",
+    "1mo": "1 month",
+    "3mo": "3 month",
+    "6mo": "6 month",
+    "1y": "1 year",
+    "5y": "5 year",
+    "max": "max",
+  };
+  return labels[normalized] || normalized.toUpperCase() || "PERIOD";
+}
+
+function shouldAutoTickerHeaderLive() {
+  if (state.route !== "ticker" || !state.ticker) return false;
+  if ((state.assetType || "").toLowerCase() === "crypto") return true;
+  const phase = state.marketStatus?.phase;
+  return ["pre_market", "open", "post_market"].includes(phase);
+}
+
+function updateTickerHeaderPrice(rows = state.chartRows, liveQuote = state.chartLiveQuote) {
+  const priceEl = $("#ticker-price");
+  const changeEl = $("#ticker-price-change");
+  if (!priceEl || !changeEl) return;
+  const series = Array.isArray(rows) ? rows : [];
+  const latestRow = series.length ? series[series.length - 1] : null;
+  const livePrice = Number(liveQuote?.price);
+  const price = Number.isFinite(livePrice) && livePrice > 0
+    ? livePrice
+    : Number(latestRow?.close);
+  const firstClose = Number(series[0]?.close);
+  if (!Number.isFinite(price) || price <= 0) {
+    priceEl.textContent = "—";
+    changeEl.textContent = "—";
+    changeEl.className = "ticker-price-change";
+    return;
+  }
+  priceEl.textContent = price.toFixed(price >= 100 ? 2 : 4);
+  if (Number.isFinite(firstClose) && firstClose > 0) {
+    const pct = ((price - firstClose) / firstClose) * 100;
+    const sign = pct > 0 ? "+" : "";
+    changeEl.textContent = `(${periodDisplayLabel(state.chartPeriod)} ${sign}${pct.toFixed(2)}%)`;
+    changeEl.className = `ticker-price-change ${pct > 0 ? "positive" : pct < 0 ? "negative" : ""}`.trim();
+  } else {
+    changeEl.textContent = `(${periodDisplayLabel(state.chartPeriod)})`;
+    changeEl.className = "ticker-price-change";
+  }
+}
+
+function updateLiveButtonState() {
+  const btn = $("#chart-live-btn");
+  if (!btn) return;
+  const enabled = Boolean(state.ticker) && state.compareTickers.length === 0 && state.route === "ticker" && state.tickerMainTab === "chart";
+  btn.disabled = !enabled || state.chartLivePendingStart;
+  btn.setAttribute("aria-pressed", state.chartLive ? "true" : "false");
+  btn.classList.toggle("active", state.chartLive);
+  btn.classList.toggle("loading", state.chartLivePendingStart);
+  btn.querySelector("span:last-child").textContent = state.chartLivePendingStart
+    ? "Starting"
+    : state.chartLive
+      ? "Live"
+      : "Live";
+  $$(".chart-range").forEach((button) => {
+    button.disabled = state.chartLive || state.chartLivePendingStart;
+  });
+  syncLiveLookbackInput();
+}
+
+function updateAnalyzeButtonState() {
+  const btn = $("#chart-analyze-btn");
+  if (!btn) return;
+  const enabled = state.chartRows.length > 0;
+  btn.disabled = !enabled || state.compareTickers.length > 0 || state.chartAnalysisLoading || state.chartLive || state.chartLivePendingStart;
+}
+
+function rerenderCurrentTickerChart() {
+  if (!state.chartRows.length) return;
+  const wrap = $("#ticker-chart-wrap");
+  if (!wrap) return;
+  const activeOverlays = [...state.indicators].filter(
+    (k) => INDICATOR_DEFS[k]?.group === "overlay"
+  );
+  const rows = state.chartLive ? state.chartRows.slice(-currentChartLookback()) : state.chartRows;
+  renderCandleChart(
+    rows,
+    wrap,
+    activeOverlays,
+    state.chartAnalysis?.rectangles || [],
+    state.chartAnalysisSelectedIndex ?? -1,
+    state.chartLiveQuote
+  );
+}
+
+async function refreshTickerHeaderLive() {
+  const ticker = state.ticker;
+  if (!ticker) return;
+  try {
+    const candleData = await fetchCandleRows(
+      ticker,
+      state.chartPeriod || "1mo",
+      state.chartInterval || chartIntervalForPeriod(state.chartPeriod || "1mo"),
+      false,
+      false,
+      "live"
+    );
+    state.chartRows = candleData.rows || [];
+    state.chartLiveQuote = candleData.live_quote || null;
+    updateTickerHeaderPrice(state.chartRows, state.chartLiveQuote);
+  } catch {
+    updateTickerHeaderPrice(state.chartRows, state.chartLiveQuote);
+  }
+}
+
+async function syncTickerHeaderLive() {
+  if (state.route !== "ticker" || !state.ticker) return;
+
+  const shouldAuto = shouldAutoTickerHeaderLive();
+  const canStart = shouldAuto && !state.chartLivePendingStart;
+
+  if (canStart && !state.tickerHeaderLive && !state.tickerHeaderLivePending) {
+    state.tickerHeaderLivePending = true;
+    try {
+      const response = await fetch("/api/live/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticker: state.ticker }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+      state.tickerHeaderLive = Boolean(data?.active) && (data?.mode || "socket") === "socket";
+      state.tickerHeaderLiveMode = data?.mode || "socket";
+      state.tickerHeaderLiveWarning = data?.warning || null;
+      if (state.tickerHeaderLive) {
+        startChartLiveRefresh();
+        await refreshTickerHeaderLive();
+      } else {
+        updateTickerHeaderPrice();
+      }
+    } catch (error) {
+      state.tickerHeaderLive = false;
+      state.tickerHeaderLiveMode = null;
+      state.tickerHeaderLiveWarning = error?.message || null;
+      updateTickerHeaderPrice();
+    } finally {
+      state.tickerHeaderLivePending = false;
+      updateLiveButtonState();
+    }
+    return;
+  }
+
+  if (!shouldAuto && state.tickerHeaderLive && !state.chartLive && !state.chartLivePendingStart) {
+    try {
+      await fetch("/api/live/stop", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticker: state.ticker }),
+      });
+    } catch {
+      sendLiveStopBeacon(state.ticker);
+    } finally {
+      state.tickerHeaderLive = false;
+      state.tickerHeaderLiveMode = null;
+      state.tickerHeaderLiveWarning = null;
+      updateTickerHeaderPrice();
+    }
+  }
+
+  if (shouldAuto || state.chartLive || state.chartLivePendingStart || state.tickerHeaderLive) {
+    startChartLiveRefresh();
+  } else {
+    stopChartLiveRefresh();
+  }
+}
+
+function shouldKeepTickerLiveSession() {
+  return Boolean(
+    shouldAutoTickerHeaderLive() ||
+    state.tickerHeaderLive ||
+    state.tickerHeaderLivePending
+  );
+}
+
+async function stopTickerPageLiveSession() {
+  const ticker = state.ticker;
+  const hasSession = state.chartLive || state.chartLivePendingStart || state.tickerHeaderLive || state.tickerHeaderLivePending;
+  state.chartLivePendingStart = false;
+  state.chartLive = false;
+  state.chartLiveTicker = null;
+  state.chartLiveMode = null;
+  state.chartLiveWarning = null;
+  state.chartLiveQuote = null;
+  state.tickerHeaderLivePending = false;
+  state.tickerHeaderLive = false;
+  state.tickerHeaderLiveMode = null;
+  state.tickerHeaderLiveWarning = null;
+  stopChartLiveRefresh();
+  updateLiveButtonState();
+  updateTickerHeaderPrice();
+
+  if (ticker && hasSession) {
+    try {
+      const response = await fetch("/api/live/stop", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticker }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+    } catch {
+      sendLiveStopBeacon(ticker);
+    }
+  }
+}
+
+function formatAnalysisSpanOption(pattern, index) {
+  const label = pattern?.title || pattern?.labels?.join(" / ") || `Span ${index + 1}`;
+  const range = pattern?.startDate && pattern?.endDate
+    ? ` (${pattern.startDate} → ${pattern.endDate})`
+    : "";
+  return `${index + 1}. ${label}${range}`;
+}
+
+function renderChartAnalysis(payload) {
+  const panel = $("#chart-analysis-panel");
+  const body = $("#chart-analysis-body");
+  const meta = $("#chart-analysis-meta");
+  if (!panel || !body || !meta) return;
+  const patterns = payload?.patterns || [];
+  const selectedIndex = Math.min(
+    Math.max(0, state.chartAnalysisSelectedIndex || 0),
+    Math.max(0, patterns.length - 1)
+  );
+  state.chartAnalysisSelectedIndex = patterns.length ? selectedIndex : 0;
+  panel.classList.remove("hidden");
+  meta.textContent = payload?.window
+    ? `${payload.window.rows} rows · ${payload.window.period || "current"} · ${payload.window.interval || "1d"}`
+    : "";
+
+  const queries = payload?.queries || [];
+  const response = payload?.response || "No analysis returned.";
+
+  body.innerHTML = `
+    ${patterns.length ? `
+      <section class="chart-analysis-section">
+        <div class="chart-analysis-nav">
+          <div>
+            <h3>Patterns</h3>
+            <div class="chart-analysis-text">Jump to a detected span and focus the matching chart region.</div>
+          </div>
+          <label class="chart-analysis-select-wrap">
+            <span>Jump to span</span>
+            <select id="chart-analysis-span-select" class="chart-analysis-select">
+              ${patterns.map((pattern, index) => `
+                <option value="${index}" ${index === selectedIndex ? "selected" : ""}>
+                  ${escapeHtml(formatAnalysisSpanOption(pattern, index))}
+                </option>
+              `).join("")}
+            </select>
+          </label>
+        </div>
+        <div class="chart-analysis-patterns">
+          ${patterns.map((pattern, index) => `
+            <div class="chart-analysis-pattern ${index === selectedIndex ? "active" : ""}" data-chart-span="${index}">
+              <strong>${escapeHtml(pattern.title || "Pattern")}</strong>
+              <div class="chart-analysis-text">${escapeHtml(pattern.details || "")}</div>
+              <small>${escapeHtml((pattern.labels || []).join(" · ") || "Pattern")} · ${escapeHtml(pattern.startDate || "—")} to ${escapeHtml(pattern.endDate || "—")} · Score ${Number(pattern.score || 0).toFixed(2)}</small>
+            </div>
+          `).join("")}
+        </div>
+      </section>` : ""}
+    ${queries.length ? `
+      <section class="chart-analysis-section">
+        <h3>Web Search</h3>
+        <div class="chart-analysis-text">${escapeHtml(queries.map((item) => `${item.query}: ${item.results?.length || 0} result(s)`).join("\n"))}</div>
+      </section>` : ""}
+    <section class="chart-analysis-section">
+      <h3>LLM Readout</h3>
+      <div class="chart-analysis-text">${renderMarkdown(response)}</div>
+    </section>
+  `;
+
+  const select = $("#chart-analysis-span-select");
+  if (select) {
+    select.value = String(selectedIndex);
+    select.onchange = () => {
+      state.chartAnalysisSelectedIndex = Number(select.value) || 0;
+      rerenderCurrentTickerChart();
+      renderChartAnalysis(state.chartAnalysis || payload);
+      $("#ticker-chart-wrap")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    };
+  }
+}
+
+async function runChartAnalysis() {
+  const ticker = state.ticker;
+  if (!ticker || !state.chartRows.length || state.compareTickers.length > 0) return;
+  const panel = $("#chart-analysis-panel");
+  const body = $("#chart-analysis-body");
+  const meta = $("#chart-analysis-meta");
+  const btn = $("#chart-analyze-btn");
+  if (!panel || !body || !meta || !btn) return;
+
+  state.chartAnalysisLoading = true;
+  updateAnalyzeButtonState();
+  panel.classList.remove("hidden");
+  meta.textContent = "Analyzing…";
+  body.innerHTML = `<div class="chart-empty">Scanning candles, searching the web, and summarizing with llama.cpp…</div>`;
+
+  try {
+    const data = await post("/api/analyze-candles", {
+      ticker,
+      assetType: state.assetType,
+      period: state.chartPeriod,
+      interval: state.chartInterval,
+      rows: state.chartRows,
+      provider: "llama",
+      llamaUrl: loadLlmSettings().serverUrl,
+    });
+    state.chartAnalysis = data;
+    state.chartAnalysisSelectedIndex = 0;
+    renderChartAnalysis(data);
+    rerenderCurrentTickerChart();
+  } catch (error) {
+    body.innerHTML = `<div class="chart-empty">${escapeHtml(error.message)}</div>`;
+    meta.textContent = "Analysis failed";
+  } finally {
+    state.chartAnalysisLoading = false;
+    updateAnalyzeButtonState();
+  }
+}
+
+function startChartLiveRefresh() {
+  if (state.chartLiveTimer) return;
+  state.chartLiveTimer = setInterval(() => {
+    if (state.route !== "ticker") return;
+    if (state.chartLive || state.chartLivePendingStart) {
+      if (state.tickerMainTab === "chart") void runTickerChart();
+      else void refreshTickerHeaderLive();
+      return;
+    }
+    if (shouldAutoTickerHeaderLive()) {
+      void refreshTickerHeaderLive();
+    }
+  }, 10000);
+}
+
+function stopChartLiveRefresh() {
+  if (!state.chartLiveTimer) return;
+  clearInterval(state.chartLiveTimer);
+  state.chartLiveTimer = null;
+}
+
+function sendLiveStopBeacon(ticker) {
+  if (!ticker || !navigator.sendBeacon) return false;
+  try {
+    const body = new Blob([JSON.stringify({ ticker })], { type: "application/json" });
+    return navigator.sendBeacon("/api/live/stop", body);
+  } catch {
+    return false;
+  }
+}
+
+async function startChartLive() {
+  const ticker = state.ticker;
+  if (!ticker || state.compareTickers.length > 0) return;
+  if (state.chartLive) return;
+  state.chartLivePendingStart = true;
+  updateLiveButtonState();
+  state.chartLive = true;
+  state.chartLiveTicker = ticker;
+  state.chartLiveMode = "poll";
+  state.chartLiveWarning = null;
+  state.chartLiveQuote = null;
+  state.chartLivePendingStart = false;
+  startChartLiveRefresh();
+  updateLiveButtonState();
+  updateAnalyzeButtonState();
+  void runTickerChart();
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch("/api/live/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ticker }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+    if (state.chartLiveTicker === ticker) {
+      state.chartLiveMode = data?.mode || state.chartLiveMode || "socket";
+      state.chartLiveWarning = data?.warning || null;
+      updateLiveButtonState();
+    }
+  } catch (error) {
+    if (state.chartLiveTicker === ticker) {
+      state.chartLiveMode = "poll";
+      state.chartLiveWarning = error?.message || "Live socket unavailable; using candle polling.";
+      updateLiveButtonState();
+    }
+  }
+}
+
+async function stopChartLive(restoreRange = true) {
+  const ticker = state.chartLiveTicker || state.ticker;
+  const wasLive = state.chartLive || state.chartLivePendingStart;
+  const keepSession = shouldKeepTickerLiveSession();
+  state.chartLivePendingStart = false;
+  state.chartLive = false;
+  state.chartLiveTicker = null;
+  state.chartLiveMode = null;
+  state.chartLiveWarning = null;
+  state.chartLiveQuote = null;
+  updateLiveButtonState();
+  updateAnalyzeButtonState();
+
+  if (ticker && !keepSession) {
+    try {
+      const response = await fetch("/api/live/stop", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ticker }),
+      });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+    } catch {
+      sendLiveStopBeacon(ticker);
+    }
+  }
+
+  await syncTickerHeaderLive();
+
+  if (restoreRange && wasLive) {
+    state.chartPeriod = state.chartLivePrevPeriod || state.chartPeriod || "1mo";
+    state.chartInterval = state.chartLivePrevInterval || state.chartInterval || "1d";
+    $$(".chart-range").forEach((btn) => {
+      btn.classList.toggle(
+        "active",
+        btn.dataset.period === state.chartPeriod && btn.dataset.interval === state.chartInterval
+      );
+    });
+    await runTickerChart();
+  }
 }
 
 function renderMarkdown(text) {
   if (!text || typeof globalThis.marked === "undefined") return text || "";
   return globalThis.marked.parse(text, { breaks: true, gfm: true });
+}
+
+function renderStreamingMarkdown(bubbleEl, content) {
+  if (!bubbleEl) return;
+  const cursor = bubbleEl.querySelector(".llm-cursor");
+  if (cursor) cursor.remove();
+  bubbleEl.innerHTML = renderMarkdown(content);
+  const newCursor = document.createElement("span");
+  newCursor.className = "llm-cursor";
+  bubbleEl.appendChild(newCursor);
 }
 
 async function fetchWebContext(query) {
@@ -150,13 +740,26 @@ function saveChatSettings(settings) {
   localStorage.setItem(CHAT_SETTINGS_KEY, JSON.stringify({ ...current, ...settings }));
 }
 
+function loadChatResearchEffort() {
+  const effort = localStorage.getItem(CHAT_RESEARCH_EFFORT_KEY) || "default";
+  return ["default", "high", "extreme"].includes(effort) ? effort : "default";
+}
+
+function saveChatResearchEffort(effort) {
+  const normalized = ["default", "high", "extreme"].includes(effort)
+    ? effort
+    : "default";
+  localStorage.setItem(CHAT_RESEARCH_EFFORT_KEY, normalized);
+  state.chatResearchEffort = normalized;
+}
+
 function createConversation(provider = "claude") {
   const settings = loadChatSettings();
   const model = provider === "claude"
     ? (settings.claudeModel || "claude-sonnet-4-6")
     : provider === "openai"
-    ? (settings.openaiModel || "gpt-4o")
-    : null;
+      ? (settings.openaiModel || "gpt-4o")
+      : null;
   const conv = {
     id: crypto.randomUUID(),
     title: "New conversation",
@@ -243,6 +846,8 @@ function appendChatMessage(role, content, streaming = false, provider = null) {
   const roleEl = document.createElement("span");
   roleEl.className = "chat-msg-role";
   roleEl.textContent = role === "user" ? "You" : role === "error" ? "Error" : (provider || "Assistant");
+  const metaEl = document.createElement("div");
+  metaEl.className = "chat-msg-meta hidden";
   const bubble = document.createElement("div");
   bubble.className = "chat-msg-bubble";
   if (streaming || role !== "assistant") {
@@ -256,10 +861,31 @@ function appendChatMessage(role, content, streaming = false, provider = null) {
     bubble.appendChild(cursor);
   }
   div.appendChild(roleEl);
+  div.appendChild(metaEl);
   div.appendChild(bubble);
   area.appendChild(div);
   area.scrollTop = area.scrollHeight;
   return bubble;
+}
+
+function setChatMessageMeta(bubbleEl, text) {
+  const metaEl = bubbleEl?.closest(".chat-msg")?.querySelector(".chat-msg-meta");
+  if (!metaEl) return;
+  const cleaned = String(text || "").trim();
+  metaEl.textContent = cleaned;
+  metaEl.classList.toggle("hidden", !cleaned);
+}
+
+function formatToolCallLabel(call) {
+  const raw = String(call || "").trim();
+  const label = raw.replace(/\(.*$/, "").replace(/^get_/, "").replace(/_/g, " ").trim();
+  return label || raw;
+}
+
+function summarizeToolCalls(toolCalls) {
+  const labels = [...new Set((toolCalls || []).map(formatToolCallLabel).filter(Boolean))];
+  if (!labels.length) return "";
+  return `Using local tools: ${labels.slice(0, 3).join(", ")}${labels.length > 3 ? ` +${labels.length - 3}` : ""}`;
 }
 
 function renderChatMessages() {
@@ -303,12 +929,15 @@ function renderChatMessages() {
 function renderChatToolbar() {
   const titleEl = $("#chat-conv-title");
   const providerBtn = $("#chat-provider-btn");
+  const effortWrap = $("#chat-effort-wrap");
+  const effortSelect = $("#chat-effort-select");
   const conv = getActiveConversation();
   if (!titleEl || !providerBtn) return;
   if (!conv) {
     titleEl.textContent = "";
     providerBtn.textContent = "— ▾";
     providerBtn.disabled = true;
+    effortWrap?.classList.add("hidden");
     return;
   }
   titleEl.textContent = conv.title;
@@ -319,6 +948,8 @@ function renderChatToolbar() {
     ? `${conv.provider} · ${modelShort} ▾`
     : `${conv.provider} ▾`;
   providerBtn.disabled = false;
+  if (effortSelect) effortSelect.value = state.chatResearchEffort || "default";
+  effortWrap?.classList.toggle("hidden", !state.chatDeepResearch);
 }
 
 function defaultChatProvider() {
@@ -335,14 +966,494 @@ function openConversation(id) {
   $("#chat-input")?.focus();
 }
 
+function getChatAutocompleteState() {
+  if (!window.__chatAutocompleteState) {
+    window.__chatAutocompleteState = {
+      requestId: 0,
+      items: [],
+      range: null,
+      timer: null,
+      visible: false,
+      activeIndex: 0,
+    };
+  }
+  return window.__chatAutocompleteState;
+}
+
+function hideChatAutocomplete() {
+  const popup = $("#chat-autocomplete");
+  if (popup) popup.classList.add("hidden");
+  const stateObj = getChatAutocompleteState();
+  stateObj.visible = false;
+  stateObj.items = [];
+  stateObj.range = null;
+  stateObj.activeIndex = 0;
+}
+
+function renderChatAutocomplete(items, range, activeIndex = 0) {
+  const popup = $("#chat-autocomplete");
+  if (!popup) return;
+  const stateObj = getChatAutocompleteState();
+  stateObj.items = items;
+  stateObj.range = range;
+  stateObj.activeIndex = activeIndex;
+  stateObj.visible = items.length > 0;
+
+  if (!items.length) {
+    popup.innerHTML = "";
+    popup.classList.add("hidden");
+    return;
+  }
+
+  popup.innerHTML = items
+    .map((item, index) => `
+      <button
+        class="chat-autocomplete-item${index === activeIndex ? " active" : ""}"
+        type="button"
+        data-chat-autocomplete-index="${index}"
+        data-chat-autocomplete-value="${escapeHtml(item.insert)}"
+        data-chat-autocomplete-start="${range.start}"
+        data-chat-autocomplete-end="${range.end}"
+        role="option"
+        aria-selected="${index === activeIndex ? "true" : "false"}"
+      >
+        <span class="chat-autocomplete-label">${escapeHtml(item.label)}</span>
+        <span class="chat-autocomplete-hint">${escapeHtml(item.hint || item.insert)}</span>
+      </button>
+    `)
+    .join("");
+  popup.classList.remove("hidden");
+}
+
+function applyChatAutocompleteItem(item, range) {
+  const input = $("#chat-input");
+  if (!input || !range || !item) return;
+  const before = input.value.slice(0, range.start);
+  const after = input.value.slice(range.end);
+  const insert = item.insert.endsWith(" ") ? item.insert : `${item.insert} `;
+  input.value = `${before}${insert}${after}`;
+  const caret = before.length + insert.length;
+  input.setSelectionRange(caret, caret);
+  input.focus();
+  hideChatAutocomplete();
+  updateChatInputHeight();
+  void refreshChatAutocomplete();
+}
+
+function updateChatInputHeight() {
+  const ta = $("#chat-input");
+  if (!ta) return;
+  ta.style.height = "38px";
+  ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`;
+}
+
+function getChatTokenAtCursor(text, caret) {
+  const before = text.slice(0, caret);
+  const start = Math.max(
+    before.lastIndexOf(" "),
+    before.lastIndexOf("\n"),
+    before.lastIndexOf("\t")
+  ) + 1;
+  const token = before.slice(start);
+  if (!token.startsWith("@")) return null;
+  return { start, end: caret, token };
+}
+
+function splitTickerQuery(raw) {
+  return String(raw || "")
+    .split(/[,\s]+/)
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function tickerContextSummary(info, ticker) {
+  const parts = [];
+  const name = info.shortName || info.longName || info.displayName || info.name || ticker;
+  parts.push(`Ticker: ${ticker}`);
+  if (name) parts.push(`Name: ${name}`);
+  if (info.assetType) parts.push(`Asset type: ${info.assetType}`);
+  if (info.exchange) parts.push(`Exchange: ${info.exchange}`);
+  if (info.sector) parts.push(`Sector: ${info.sector}`);
+  if (info.industry) parts.push(`Industry: ${info.industry}`);
+  if (info.marketCap != null) parts.push(`Market cap: ${formatValue(info.marketCap)}`);
+  if (info.currentPrice != null) parts.push(`Current price: ${formatValue(info.currentPrice)}`);
+  if (info.regularMarketPrice != null && info.currentPrice == null) {
+    parts.push(`Current price: ${formatValue(info.regularMarketPrice)}`);
+  }
+  if (info.trailingPE != null) parts.push(`Trailing P/E: ${formatValue(info.trailingPE)}`);
+  if (info.forwardPE != null) parts.push(`Forward P/E: ${formatValue(info.forwardPE)}`);
+  if (info.dividendYield != null) parts.push(`Dividend yield: ${formatValue(info.dividendYield)}`);
+  if (info.ceo) parts.push(`CEO: ${info.ceo}`);
+  if (info.longBusinessSummary) parts.push(`Summary: ${String(info.longBusinessSummary).trim()}`);
+  return parts.join("\n");
+}
+
+function marketCommandSummary(command, payload) {
+  if (!payload) return "";
+  if (command.startsWith("macro/")) {
+    const rows = payload?.data?.rows || [];
+    const columns = payload?.data?.columns || [];
+    const xCol = payload?.x_column || "observation_date";
+    const lines = [
+      `Title: ${payload.title || command}`,
+      `Rows: ${rows.length}`,
+      `Latest date: ${rows[0]?.[xCol] || "—"}`,
+    ];
+    const seriesCols = (payload?.chart_columns || []).filter((column) => columns.includes(column)).slice(0, 3);
+    if (seriesCols.length && rows.length) {
+      lines.push("Latest values:");
+      seriesCols.forEach((column) => {
+        lines.push(`- ${column}: ${formatValue(rows[0]?.[column])}`);
+      });
+    }
+    if (rows.length > 1) {
+      lines.push("Recent rows:");
+      rows.slice(0, 3).forEach((row, index) => {
+        const bits = [row[xCol], ...seriesCols.map((column) => `${column}=${formatValue(row?.[column])}`)].filter(Boolean);
+        lines.push(`${index + 1}. ${bits.join(" · ")}`);
+      });
+    }
+    return lines.join("\n");
+  }
+
+  if (command.startsWith("prediction/")) {
+    const events = payload?.events || [];
+    const counts = payload?.counts || {};
+    const lines = [
+      `Title: Prediction Markets`,
+      `Tab: ${command.split("/")[1] || "all"}`,
+      `Events: ${events.length}`,
+      `Open markets: ${payload?.totals?.markets ?? 0}`,
+    ];
+    if (counts && typeof counts === "object") {
+      const topCounts = Object.entries(counts)
+        .filter(([key]) => key !== "all")
+        .sort((a, b) => (b[1] || 0) - (a[1] || 0))
+        .slice(0, 4);
+      if (topCounts.length) {
+        lines.push("Category counts:");
+        topCounts.forEach(([key, value]) => lines.push(`- ${key}: ${value}`));
+      }
+    }
+    if (events.length) {
+      lines.push("Top events:");
+      events.slice(0, 3).forEach((event, index) => {
+        lines.push(
+          `${index + 1}. ${event.title || event.event_ticker} · ${event.category || event.category_key || "Other"} · `
+          + `${event.markets_count || 0} markets · ${formatValue(event.total_volume_fp || 0)} volume`
+        );
+      });
+    }
+    return lines.join("\n");
+  }
+
+  const data = payload?.data || payload;
+  const rows = data?.rows || [];
+  const columns = data?.columns || [];
+  const lines = [
+    `Title: ${payload.title || command}`,
+    `Rows: ${rows.length}`,
+  ];
+  if (!rows.length || !columns.length) return lines.join("\n");
+
+  const usefulCols = ["symbol", "name", "price", "change %", "change", "volume", "market cap", "sector"]
+    .map((column) => columns.find((item) => String(item).toLowerCase() === column))
+    .filter(Boolean);
+  const displayCols = usefulCols.length ? usefulCols : columns.slice(0, Math.min(columns.length, 4));
+  lines.push("Top rows:");
+  rows.slice(0, 3).forEach((row, index) => {
+    const bits = displayCols.map((column) => `${column}=${formatValue(row?.[column])}`).filter(Boolean);
+    lines.push(`${index + 1}. ${bits.join(" · ")}`);
+  });
+  return lines.join("\n");
+}
+
+function normalizeMarketCommand(command) {
+  return String(command || "")
+    .trim()
+    .replace(/^@markets\/?/, "")
+    .toLowerCase();
+}
+
+function isPredictionMarketTab(key) {
+  return new Set(["all", "sports", "crypto", "politics", "economics", "weather", "technology", "entertainment", "energy", "other"]).has(key);
+}
+
+function isMacroTab(key) {
+  return new Set(["gdp", "cpi", "pce", "labor", "unemployment", "treasury", "fed_funds", "credit", "liquidity", "housing", "consumer"]).has(key);
+}
+
+function buildMarketAutocompleteItems(token) {
+  const normalized = token.toLowerCase();
+  if (!normalized.startsWith("@markets")) return [];
+  const query = normalized.replace(/^@markets\/?/, "");
+  const base = CHAT_MARKET_COMMANDS;
+  if (!query) return base.slice(0, CHAT_AUTOCOMPLETE_LIMIT);
+
+  return base.filter((item) => {
+    const insert = item.insert.toLowerCase();
+    const label = item.label.toLowerCase();
+    return insert.includes(normalized) || insert.startsWith(`@markets/${query}`) || label.includes(query);
+  }).slice(0, CHAT_AUTOCOMPLETE_LIMIT);
+}
+
+function isMarketAutocompleteTrigger(token) {
+  const normalized = token.toLowerCase();
+  return normalized === "@m"
+    || normalized === "@ma"
+    || normalized === "@mar"
+    || normalized === "@mark"
+    || normalized === "@marke"
+    || normalized === "@market"
+    || normalized.startsWith("@markets");
+}
+
+async function fetchMarketContext(command) {
+  const normalized = normalizeMarketCommand(command);
+  if (!normalized) return null;
+  const cacheKey = `market:${normalized}`;
+  const cached = state.chatContextCache?.get(cacheKey);
+  if (cached) return cached;
+
+  let data = null;
+  if (normalized.startsWith("macro/")) {
+    const tab = normalized.split("/")[1];
+    if (!isMacroTab(tab)) return null;
+    const response = await fetch(`/api/macro?tab=${encodeURIComponent(tab)}`);
+    data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+  } else if (normalized.startsWith("prediction/")) {
+    const tab = normalized.split("/")[1];
+    if (!isPredictionMarketTab(tab)) return null;
+    const params = new URLSearchParams({
+      limit: "100",
+      status: "open",
+      with_nested_markets: "true",
+      with_milestones: "true",
+    });
+    const response = await fetch(`/api/kalshi/events?${params.toString()}`);
+    const payload = await response.json();
+    if (!response.ok || payload.error) throw new Error(payload.error || "Request failed.");
+    const targetKey = tab;
+    const events = (payload.events || [])
+      .map((event) => ({
+        ...event,
+        category_key: normalizePredictionCategory(`${event.title || ""} ${event.sub_title || ""} ${event.category || ""}`),
+      }))
+      .filter((event) => targetKey === "all" || event.category_key === targetKey);
+    data = {
+      title: "Prediction Markets",
+      events,
+      totals: { markets: events.reduce((sum, event) => sum + (event.markets || []).length, 0) },
+      counts: events.reduce((acc, event) => {
+        acc[event.category_key] = (acc[event.category_key] || 0) + 1;
+        acc.all = (acc.all || 0) + 1;
+        return acc;
+      }, {}),
+    };
+  } else {
+    const sub = normalized;
+    const response = await fetch(`/api/markets?sub=${encodeURIComponent(sub)}`);
+    data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+  }
+
+  if (!state.chatContextCache) state.chatContextCache = new Map();
+  state.chatContextCache.set(cacheKey, data);
+  return data;
+}
+
+function normalizePredictionCategory(text) {
+  const lower = String(text || "").toLowerCase();
+  const pairs = [
+    ["sports", ["sport", "nba", "nfl", "mlb", "nhl", "soccer", "football", "basketball", "baseball", "hockey", "golf", "tennis", "olympic", "world cup", "f1"]],
+    ["crypto", ["crypto", "bitcoin", "btc", "ethereum", "eth", "solana", "sol", "xrp", "dogecoin", "doge", "blockchain", "stablecoin", "altcoin"]],
+    ["politics", ["politic", "election", "president", "white house", "congress", "senate", "house", "campaign", "trump", "biden", "harris", "democrat", "republican", "governor", "supreme court"]],
+    ["economics", ["inflation", "cpi", "pce", "fed", "fomc", "rate", "rates", "gdp", "recession", "jobs", "jobless", "unemployment", "treasury", "yield", "macro", "economic", "employment", "payroll"]],
+    ["weather", ["weather", "hurricane", "storm", "snow", "rain", "temperature", "climate", "heat", "flood", "tornado", "wildfire", "forecast", "blizzard"]],
+    ["technology", ["technology", "tech", "ai", "artificial intelligence", "semiconductor", "chip", "chips", "nvidia", "apple", "microsoft", "google", "openai", "software", "internet", "cloud", "hardware"]],
+    ["entertainment", ["entertainment", "movie", "film", "box office", "music", "tv", "television", "celebrity", "oscars", "grammy", "streaming", "netflix", "disney"]],
+    ["energy", ["energy", "oil", "gas", "gasoline", "opec", "crude", "petroleum", "wti", "brent", "renewable", "solar", "wind", "power"]],
+  ];
+  for (const [key, hints] of pairs) {
+    if (hints.some((hint) => lower.includes(hint))) return key;
+  }
+  return "other";
+}
+
+async function fetchTickerContext(ticker) {
+  const normalized = String(ticker || "").trim().toUpperCase();
+  if (!normalized) return null;
+  const cacheKey = `ticker:${normalized}`;
+  const cached = state.chatContextCache?.get(cacheKey);
+  if (cached) return cached;
+  const response = await fetch(`/api/ticker-info?ticker=${encodeURIComponent(normalized)}`);
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Request failed.");
+  if (!state.chatContextCache) state.chatContextCache = new Map();
+  state.chatContextCache.set(cacheKey, data);
+  return data;
+}
+
+function formatChatContextBlock(token, lines) {
+  return [`[Context: ${token}]`, ...lines.filter(Boolean)].join("\n");
+}
+
+async function buildChatContextMessage(text) {
+  const tokenPattern = /@(tickers|markets)\/([A-Za-z0-9.\-_,\/]+)/g;
+  const tokens = [];
+  let match;
+  while ((match = tokenPattern.exec(text)) !== null) {
+    tokens.push({
+      token: match[0],
+      type: match[1],
+      body: match[2],
+      start: match.index,
+      end: tokenPattern.lastIndex,
+    });
+  }
+  if (!tokens.length) {
+    return { text, contexts: [] };
+  }
+
+  const contexts = [];
+  const cleanedParts = [];
+  let cursor = 0;
+  for (const token of tokens) {
+    cleanedParts.push(text.slice(cursor, token.start));
+    cursor = token.end;
+    if (token.type === "tickers") {
+      const tickers = splitTickerQuery(token.body).slice(0, 5);
+      const summaries = [];
+      for (const ticker of tickers) {
+        try {
+          const info = await fetchTickerContext(ticker);
+          if (!info) continue;
+          summaries.push(tickerContextSummary(info, ticker));
+        } catch (error) {
+          summaries.push(`Ticker: ${ticker}\nError: ${error.message}`);
+        }
+      }
+      if (summaries.length) {
+        contexts.push(formatChatContextBlock(token.token, summaries));
+      }
+    } else if (token.type === "markets") {
+      try {
+        const data = await fetchMarketContext(token.body);
+        if (data) {
+          const summary = marketCommandSummary(token.body, data);
+          if (summary) contexts.push(formatChatContextBlock(token.token, [summary]));
+        }
+      } catch (error) {
+        contexts.push(formatChatContextBlock(token.token, [`Error: ${error.message}`]));
+      }
+    }
+  }
+  cleanedParts.push(text.slice(cursor));
+
+  const cleaned = cleanedParts.join("").replace(/\s{2,}/g, " ").trim();
+  return { text: cleaned || text.trim(), contexts };
+}
+
+function formatChatAutocompleteItems(token, tickers, query) {
+  const items = [];
+  const normalizedToken = token.toLowerCase();
+  if (normalizedToken === "@" || normalizedToken === "@t" || normalizedToken === "@ti" || normalizedToken === "@tick" || normalizedToken === "@ticke" || normalizedToken === "@ticker" || normalizedToken === "@tickers" || normalizedToken === "@tickers/") {
+    items.push(...CHAT_COMMANDS.map((cmd) => ({
+      label: cmd.label,
+      hint: cmd.hint,
+      insert: cmd.token,
+    })));
+    return items;
+  }
+
+  if (isMarketAutocompleteTrigger(normalizedToken)) {
+    const marketItems = buildMarketAutocompleteItems(normalizedToken);
+    if (marketItems.length) {
+      items.push(...marketItems);
+      return items;
+    }
+  }
+
+  if (normalizedToken.startsWith("@tickers/")) {
+    const q = String(query || "").trim().toUpperCase();
+    if (!tickers.length && q.length < 1) {
+      items.push({
+        label: "Type a ticker symbol",
+        hint: "@tickers/AAPL",
+        insert: "@tickers/AAPL",
+      });
+      return items;
+    }
+    tickers.slice(0, CHAT_AUTOCOMPLETE_LIMIT).forEach((item) => {
+      items.push({
+        label: `${item.ticker} · ${item.name || "Ticker"}`,
+        hint: item.ticker,
+        insert: `@tickers/${item.ticker}`,
+      });
+    });
+  }
+
+  return items;
+}
+
+async function refreshChatAutocomplete() {
+  const input = $("#chat-input");
+  const popup = $("#chat-autocomplete");
+  if (!input || !popup || input.disabled) return;
+
+  const tokenInfo = getChatTokenAtCursor(input.value, input.selectionStart ?? input.value.length);
+  if (!tokenInfo) {
+    hideChatAutocomplete();
+    return;
+  }
+
+  const normalized = tokenInfo.token.toLowerCase();
+  const requestId = (getChatAutocompleteState().requestId += 1);
+
+  if (normalized.startsWith("@tickers/")) {
+    const query = normalized.slice("@tickers/".length).trim();
+    if (!query) {
+      renderChatAutocomplete(formatChatAutocompleteItems(tokenInfo.token, [], query), tokenInfo);
+      return;
+    }
+    try {
+      const results = await fetch(`/api/search?q=${encodeURIComponent(query)}`).then((r) => r.json());
+      if (requestId !== getChatAutocompleteState().requestId) return;
+      const items = formatChatAutocompleteItems(tokenInfo.token, results || [], query);
+      if (items.length) renderChatAutocomplete(items, tokenInfo);
+      else hideChatAutocomplete();
+    } catch {
+      hideChatAutocomplete();
+    }
+    return;
+  }
+
+  if (normalized.startsWith("@markets")) {
+    const items = formatChatAutocompleteItems(tokenInfo.token, [], "");
+    if (items.length) renderChatAutocomplete(items, tokenInfo);
+    else hideChatAutocomplete();
+    return;
+  }
+
+  const items = formatChatAutocompleteItems(tokenInfo.token, [], "");
+  if (items.length) renderChatAutocomplete(items, tokenInfo);
+  else hideChatAutocomplete();
+}
+
 async function streamChatResponse(messages, provider, model, bubbleEl) {
   let url, bodyObj;
   const headers = { "content-type": "application/json" };
 
   if (provider === "llama") {
     const { serverUrl } = loadLlmSettings();
-    url = `${serverUrl.replace(/\/$/, "")}/v1/chat/completions`;
-    bodyObj = { model: "local", messages, stream: true };
+    url = "/api/chat/llama";
+    bodyObj = {
+      model: "local",
+      messages,
+      stream: true,
+      llamaUrl: serverUrl || "http://localhost:8080",
+    };
   } else {
     url = `/api/chat/${provider}`;
     bodyObj = { messages, model, stream: true };
@@ -357,8 +1468,17 @@ async function streamChatResponse(messages, provider, model, bubbleEl) {
 
   if (!res.ok) {
     let errMsg = `HTTP ${res.status}`;
-    try { const d = await res.json(); errMsg = d.error || errMsg; } catch {}
-    return { content: "", error: errMsg };
+    try { const d = await res.json(); errMsg = d.error || errMsg; } catch { }
+    return { content: "", error: errMsg, toolCalls: [] };
+  }
+
+  let toolCalls = [];
+  try {
+    const rawToolCalls = res.headers.get("x-stocklens-tool-calls");
+    if (rawToolCalls) toolCalls = JSON.parse(rawToolCalls);
+  } catch { }
+  if (toolCalls.length) {
+    setChatMessageMeta(bubbleEl, summarizeToolCalls(toolCalls));
   }
 
   const reader = res.body.getReader();
@@ -381,23 +1501,16 @@ async function streamChatResponse(messages, provider, model, bubbleEl) {
         const token = obj.choices?.[0]?.delta?.content;
         if (token) {
           content += token;
-          const cursor = bubbleEl.querySelector(".llm-cursor");
-          if (cursor) cursor.remove();
-          bubbleEl.textContent = content;
-          const newCursor = document.createElement("span");
-          newCursor.className = "llm-cursor";
-          bubbleEl.appendChild(newCursor);
+          renderStreamingMarkdown(bubbleEl, content);
           bubbleEl.closest("#chat-messages")?.scrollTo(0, 999999);
         }
-      } catch {}
+      } catch { }
     }
   }
 
   reader.cancel();
-  const cursor = bubbleEl.querySelector(".llm-cursor");
-  if (cursor) cursor.remove();
   bubbleEl.innerHTML = renderMarkdown(content);
-  return { content, error: null };
+  return { content, error: null, toolCalls };
 }
 
 async function sendDeepResearch() {
@@ -408,6 +1521,9 @@ async function sendDeepResearch() {
 
   const { provider, model } = conv;
   const llamaUrl = provider === "llama" ? (loadLlmSettings().serverUrl || "http://localhost:8080") : undefined;
+  const effort = ["high", "extreme"].includes(state.chatResearchEffort)
+    ? state.chatResearchEffort
+    : "default";
 
   state.chatStreaming = true;
   input.value = "";
@@ -415,6 +1531,7 @@ async function sendDeepResearch() {
   $("#chat-send")?.setAttribute("disabled", "");
 
   const isFirstAssistant = !conv.messages.some((m) => m.role === "assistant");
+  const { text: cleanedText, contexts } = await buildChatContextMessage(text);
   conv.messages.push({ role: "user", content: text, timestamp: Date.now() });
   updateConversation(conv.id, {});
   appendChatMessage("user", text);
@@ -426,10 +1543,13 @@ async function sendDeepResearch() {
   const progressRoleEl = document.createElement("span");
   progressRoleEl.className = "chat-msg-role";
   progressRoleEl.textContent = provider || "Assistant";
+  const progressMetaEl = document.createElement("div");
+  progressMetaEl.className = "chat-msg-meta hidden";
   const progressCard = document.createElement("div");
   progressCard.className = "research-progress";
   progressCard.innerHTML = `<div class="research-header">🔬 Deep Research</div><div class="research-phase">Planning…</div>`;
   progressMsgDiv.appendChild(progressRoleEl);
+  progressMsgDiv.appendChild(progressMetaEl);
   progressMsgDiv.appendChild(progressCard);
   area.appendChild(progressMsgDiv);
   area.scrollTop = area.scrollHeight;
@@ -437,6 +1557,16 @@ async function sendDeepResearch() {
   const apiMessages = conv.messages
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => ({ role: m.role, content: m.content }));
+  if (apiMessages.length) {
+    const promptParts = [];
+    if (contexts.length) promptParts.push(...contexts);
+    if (promptParts.length) {
+      apiMessages[apiMessages.length - 1] = {
+        role: "user",
+        content: `${promptParts.join("\n\n---\n\n")}\n\n---\n\n${cleanedText}`,
+      };
+    }
+  }
 
   let content = "";
   let isClarification = false;
@@ -470,7 +1600,7 @@ async function sendDeepResearch() {
     const res = await fetch("/api/chat/deep-research", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ messages: apiMessages, provider, model, ...(llamaUrl && { llamaUrl }) }),
+      body: JSON.stringify({ messages: apiMessages, provider, model, effort, ...(llamaUrl && { llamaUrl }) }),
     });
     if (!res.ok) {
       progressMsgDiv.remove();
@@ -498,6 +1628,10 @@ async function sendDeepResearch() {
             case "status":
               setPhase(evt.text);
               break;
+            case "tool_context":
+              progressMetaEl.textContent = summarizeToolCalls(evt.tool_calls || []);
+              progressMetaEl.classList.toggle("hidden", !progressMetaEl.textContent.trim());
+              break;
             case "plan":
               queries = evt.queries;
               for (const q of queries) queryStatus[q] = "pending";
@@ -519,12 +1653,7 @@ async function sendDeepResearch() {
             case "token":
               if (answerBubble) {
                 content += evt.content;
-                const cursor = answerBubble.querySelector(".llm-cursor");
-                if (cursor) cursor.remove();
-                answerBubble.textContent = content;
-                const newCursor = document.createElement("span");
-                newCursor.className = "llm-cursor";
-                answerBubble.appendChild(newCursor);
+                renderStreamingMarkdown(answerBubble, content);
                 area.scrollTop = area.scrollHeight;
               }
               break;
@@ -540,12 +1669,11 @@ async function sendDeepResearch() {
               appendChatMessage("error", `⚠ ${evt.text}`);
               break;
           }
-        } catch {}
+        } catch { }
       }
     }
     reader.cancel();
     if (answerBubble) {
-      answerBubble.querySelector(".llm-cursor")?.remove();
       if (content) {
         answerBubble.innerHTML = renderMarkdown(content);
       } else {
@@ -583,8 +1711,9 @@ async function sendChatMessage() {
 
   state.chatStreaming = true;
   input.value = "";
-  input.style.height = "38px";
+  updateChatInputHeight();
   $("#chat-send")?.setAttribute("disabled", "");
+  hideChatAutocomplete();
 
   const isFirstAssistant = !conv.messages.some((m) => m.role === "assistant");
   const userMsg = { role: "user", content: text, timestamp: Date.now() };
@@ -598,16 +1727,25 @@ async function sendChatMessage() {
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => ({ role: m.role, content: m.content }));
 
-  if (state.chatWebSearch) {
-    const webCtx = await fetchWebContext(text);
-    if (webCtx && apiMessages.length) {
-      apiMessages[apiMessages.length - 1] = { role: "user", content: `${webCtx}\n\n---\n\n${text}` };
-      userBubble?.closest(".chat-msg")?.classList.add("web-search");
-    }
-  }
-
   try {
-    const { content, error } = await streamChatResponse(apiMessages, provider, model, bubble);
+    const { text: cleanedText, contexts } = await buildChatContextMessage(text);
+    const promptParts = [];
+    if (contexts.length) {
+      promptParts.push(...contexts);
+    }
+    let promptText = cleanedText;
+    if (state.chatWebSearch) {
+      const webCtx = await fetchWebContext(cleanedText);
+      if (webCtx) {
+        promptParts.push(webCtx);
+        userBubble?.closest(".chat-msg")?.classList.add("web-search");
+      }
+    }
+    if (promptParts.length) {
+      promptText = `${promptParts.join("\n\n---\n\n")}\n\n---\n\n${cleanedText}`;
+    }
+    const finalMessages = apiMessages.slice(0, -1).concat({ role: "user", content: promptText });
+    const { content, error } = await streamChatResponse(finalMessages, provider, model, bubble);
 
     if (error) {
       bubble.closest(".chat-msg")?.remove();
@@ -644,7 +1782,7 @@ async function generateChatTitle(convId, firstMessage, provider, model) {
       renderChatSidebar();
       if (state.chatActiveId === convId) renderChatToolbar();
     }
-  } catch {}
+  } catch { }
 }
 
 function renderChatProviderDropdown() {
@@ -680,19 +1818,18 @@ function renderChatProviderDropdown() {
          data-provider="${p.key}"
          ${!p.available ? 'title="Not configured"' : ""}>
       <span class="chat-provider-name">${p.label}</span>
-      ${
-        p.models
+      ${p.models
           ? `<select class="chat-model-select" data-provider-model="${p.key}"
                ${!p.available ? "disabled" : ""}>
                ${p.models
-                 .map(
-                   (m) =>
-                     `<option value="${m}"${conv.provider === p.key && conv.model === m ? " selected" : ""}>${m}</option>`
-                 )
-                 .join("")}
+            .map(
+              (m) =>
+                `<option value="${m}"${conv.provider === p.key && conv.model === m ? " selected" : ""}>${m}</option>`
+            )
+            .join("")}
              </select>`
           : ""
-      }
+        }
     </div>`
     )
     .join("");
@@ -752,6 +1889,7 @@ function bindChat() {
     const btn = $("#chat-deep-toggle");
     btn.classList.toggle("active", state.chatDeepResearch);
     btn.setAttribute("aria-pressed", String(state.chatDeepResearch));
+    $("#chat-effort-wrap")?.classList.toggle("hidden", !state.chatDeepResearch);
     const input = $("#chat-input");
     if (input) {
       input.placeholder = state.chatDeepResearch
@@ -760,7 +1898,33 @@ function bindChat() {
     }
   });
 
+  $("#chat-effort-select")?.addEventListener("change", () => {
+    saveChatResearchEffort($("#chat-effort-select")?.value || "default");
+    renderChatToolbar();
+  });
+
   $("#chat-input")?.addEventListener("keydown", (e) => {
+    const autocomplete = getChatAutocompleteState();
+    if (autocomplete.visible && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+      e.preventDefault();
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      const next = autocomplete.items.length
+        ? (autocomplete.activeIndex + delta + autocomplete.items.length) % autocomplete.items.length
+        : 0;
+      renderChatAutocomplete(autocomplete.items, autocomplete.range, next);
+      return;
+    }
+    if (autocomplete.visible && e.key === "Tab") {
+      e.preventDefault();
+      const item = autocomplete.items[autocomplete.activeIndex] || autocomplete.items[0];
+      if (item) applyChatAutocompleteItem(item, autocomplete.range);
+      return;
+    }
+    if (autocomplete.visible && e.key === "Escape") {
+      e.preventDefault();
+      hideChatAutocomplete();
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       sendChatMessage();
@@ -768,9 +1932,31 @@ function bindChat() {
   });
 
   $("#chat-input")?.addEventListener("input", () => {
-    const ta = $("#chat-input");
-    ta.style.height = "38px";
-    ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`;
+    updateChatInputHeight();
+    void refreshChatAutocomplete();
+  });
+
+  $("#chat-input")?.addEventListener("focus", () => {
+    void refreshChatAutocomplete();
+  });
+
+  $("#chat-autocomplete")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-chat-autocomplete-value]");
+    if (!btn) return;
+    const input = $("#chat-input");
+    if (!input) return;
+    const start = Number(btn.dataset.chatAutocompleteStart);
+    const end = Number(btn.dataset.chatAutocompleteEnd);
+    applyChatAutocompleteItem(
+      {
+        insert: btn.dataset.chatAutocompleteValue || "",
+      },
+      { start, end }
+    );
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".chat-input-area")) hideChatAutocomplete();
   });
 
   $("#chat-provider-btn")?.addEventListener("click", (e) => {
@@ -822,6 +2008,7 @@ function bindChat() {
 async function initChat() {
   if (state.chatStreaming) return;
   state.chatConversations = loadChatConversations();
+  state.chatResearchEffort = loadChatResearchEffort();
   try {
     const data = await fetch("/api/chat/providers").then((r) => r.json());
     state.chatProviders = {
@@ -837,6 +2024,7 @@ async function initChat() {
     };
   }
   renderChatSidebar();
+  renderChatToolbar();
   if (state.chatConversations.length) {
     openConversation(state.chatConversations[0].id);
   } else {
@@ -850,6 +2038,111 @@ async function testLlmConnection(url) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   return data?.data?.[0]?.id || "unknown";
+}
+
+// ── Dashboard LLM quick-ask ────────────────────────────────────
+
+const DASHBOARD_LLM_LABELS = {
+  gainers: "top stock gainers",
+  losers: "top stock losers",
+  unusual_volume: "stocks with unusual trading volume",
+};
+
+// Try progressively broader queries for a single ticker, covering today + yesterday.
+async function fetchTickerNewsWithFallback(ticker, dateLabel) {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayLabel = yesterday.toLocaleDateString("en-US", {
+    year: "numeric", month: "long", day: "numeric",
+  });
+  const queries = [
+    `${ticker} stock news ${dateLabel}`,
+    `${ticker} stock news ${yesterdayLabel}`,
+    `${ticker} stock why moving ${dateLabel} OR ${yesterdayLabel}`,
+    `${ticker} stock why moving today`,
+    `${ticker} stock`,
+  ];
+  for (const q of queries) {
+    const result = await fetchWebContext(q);
+    if (result) return result;
+  }
+  return null;
+}
+
+async function sendDashboardLlmQuery(sub) {
+  if (state.llmStreaming) return;
+  if (!state.llmOpen) openLlmSidebar();
+  showLlmView("chat");
+
+  const label = DASHBOARD_LLM_LABELS[sub] || sub.replace(/_/g, " ");
+  const today = new Date().toLocaleDateString("en-US", {
+    year: "numeric", month: "long", day: "numeric",
+  });
+
+  // Pull tickers from the already-cached card data
+  const cached = state.marketsCache.get(sub);
+  const rows = cached?.data?.data?.rows ?? [];
+  const cols = cached?.data?.data?.columns ?? [];
+  const symCol = cols.find((c) => c.toLowerCase() === "symbol");
+  const tickers = rows.slice(0, 5).map((r) => r[symCol]).filter(Boolean);
+
+  const tickerList = tickers.length ? tickers.join(", ") : "the tickers shown";
+  const userText = `Today is ${today}. Why are today's ${label} (${tickerList}) moving the way they are? What news or events might explain this?`;
+
+  // Show the user bubble immediately
+  state.llmStreaming = true;
+  $("#llm-send").disabled = true;
+  state.llmHistory.push({ role: "user", content: userText });
+  appendLlmMessage("user", userText);
+  if (state.llmHistory.length > LLM_HISTORY_MAX) {
+    state.llmHistory = state.llmHistory.slice(-LLM_HISTORY_MAX);
+  }
+
+  // Show a status bubble while we fetch
+  const statusDiv = document.createElement("div");
+  statusDiv.className = "llm-msg assistant";
+  statusDiv.innerHTML = `<span class="llm-msg-role">LLM</span><div class="llm-msg-bubble" style="color:#7a7a9a">Fetching news for each ticker…</div>`;
+  $("#llm-messages").appendChild(statusDiv);
+  $("#llm-messages").scrollTop = $("#llm-messages").scrollHeight;
+
+  // Fetch each ticker's news in parallel — retry with broader queries if needed
+  let contextBlock = "";
+  if (tickers.length) {
+    const results = await Promise.all(tickers.map((t) => fetchTickerNewsWithFallback(t, today)));
+    const parts = tickers
+      .map((t, i) => results[i] ? `### ${t}\n${results[i]}` : null)
+      .filter(Boolean);
+    if (parts.length) {
+      contextBlock = `[Per-ticker news — ${today}]\n\n${parts.join("\n\n---\n\n")}`;
+    }
+  }
+
+
+  // Remove the status bubble
+  statusDiv.remove();
+
+  // Build the final messages array with injected context
+  const systemMsg = { role: "system", content: buildSystemPrompt() };
+  const enrichedUser = contextBlock
+    ? { role: "user", content: `${contextBlock}\n\n---\n\n${userText}` }
+    : { role: "user", content: userText };
+  const historyWithout = state.llmHistory.slice(0, -1); // exclude last (already enriched)
+  const messages = [systemMsg, ...historyWithout, enrichedUser];
+
+  try {
+    const reply = await streamLlmResponse(messages);
+    if (reply) {
+      state.llmHistory.push({ role: "assistant", content: reply });
+      if (state.llmHistory.length > LLM_HISTORY_MAX) {
+        state.llmHistory = state.llmHistory.slice(-LLM_HISTORY_MAX);
+      }
+    }
+  } catch (err) {
+    appendLlmMessage("error", `⚠ ${err.message}`);
+  } finally {
+    state.llmStreaming = false;
+    $("#llm-send").disabled = false;
+  }
 }
 
 function openLlmSidebar() {
@@ -884,6 +2177,27 @@ function getLlmTableRows(limit = 20) {
       )
     );
   return rows.length ? rows : null;
+}
+
+function buildDashboardLlmContext() {
+  const sections = [];
+  for (const item of DASHBOARD_MARKETS) {
+    const cached = state.marketsCache.get(item.sub);
+    if (!cached) continue;
+    const rows = cached.data?.data?.rows ?? [];
+    const cols = cached.data?.data?.columns ?? [];
+    const symbolCol = cols.find((c) => c.toLowerCase() === "symbol");
+    const nameCol = cols.find((c) => c.toLowerCase() === "name");
+    const changeCol = cols.find((c) => c.toLowerCase() === "change %")
+      ?? cols.find((c) => /^change/i.test(c));
+    const top5 = rows.slice(0, 5).map((r) => ({
+      symbol: r[symbolCol] ?? "—",
+      name: r[nameCol] ?? "—",
+      ...(changeCol !== undefined ? { change: r[changeCol] } : {}),
+    }));
+    if (top5.length) sections.push({ label: item.label, tickers: top5 });
+  }
+  return sections.length ? sections : null;
 }
 
 function buildLlmContext() {
@@ -927,9 +2241,11 @@ function buildLlmContext() {
   }
 
   if (route === "dashboard") {
+    const dashData = buildDashboardLlmContext();
+    const loaded = dashData ? dashData.map((s) => s.label).join(", ") : "market pulse";
     return {
-      description: "Dashboard — market pulse",
-      data: null,
+      description: `Dashboard — ${loaded}`,
+      data: dashData,
     };
   }
 
@@ -937,7 +2253,7 @@ function buildLlmContext() {
     const tickers = ($("#multi-form")?.elements?.tickers?.value || "").replace(/\n/g, ", ");
     const analysis = $("#multi-form")?.elements?.analysis?.value || "analysis";
     return {
-      description: `Multi-ticker ${analysis}: ${tickers}`,
+      description: `Compare ${analysis}: ${tickers}`,
       data: getLlmTableRows(20),
     };
   }
@@ -989,6 +2305,7 @@ async function loadMarketStatus() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     state.marketStatus = await res.json();
     renderMarketStatus();
+    void syncTickerHeaderLive();
   } catch {
     const status = $("#market-status");
     status.classList.remove("open");
@@ -1015,6 +2332,9 @@ function renderMarketStatus() {
   if (remainingMs === 0) {
     loadMarketStatus();
   }
+  if (state.route === "ticker") {
+    void syncTickerHeaderLive();
+  }
 }
 
 function formatCountdown(ms) {
@@ -1038,22 +2358,64 @@ function initMarketStatus() {
 
 function routeFromPath() {
   const path = location.pathname;
-  if (path.startsWith("/ticker/")) return "ticker";
+  if (path.startsWith("/ticker/") || path.startsWith("/etf/") || path.startsWith("/crypto/")) return "ticker";
   const route = path.replace("/", "") || "dashboard";
   return ["dashboard", "chat", "markets", "multi", "watchlist", "screener", "option-screener", "dcf"].includes(route) ? route : "dashboard";
 }
 
+function assetTypeFromPath() {
+  if (location.pathname.startsWith("/etf/")) return "etf";
+  if (location.pathname.startsWith("/crypto/")) return "crypto";
+  return "stock";
+}
+
+function marketsSubFromPath() {
+  const sub = new URLSearchParams(location.search).get("sub");
+  return sub && sub.trim() ? sub.trim() : null;
+}
+
+function macroTabFromPath() {
+  const tab = new URLSearchParams(location.search).get("tab");
+  return tab && tab.trim() ? tab.trim() : null;
+}
+
+function predictionTabFromPath() {
+  const tab = new URLSearchParams(location.search).get("tab");
+  return tab && tab.trim() ? tab.trim() : null;
+}
+
+function normalizePredictionTab(tab) {
+  const normalized = String(tab || "all").trim().toLowerCase();
+  const allowed = new Set(["all", "sports", "crypto", "politics", "economics", "weather", "technology", "entertainment", "energy", "other"]);
+  return allowed.has(normalized) ? normalized : "all";
+}
+
 function tickerFromPath() {
-  const m = location.pathname.match(/^\/ticker\/([^/]+)/);
+  const m = location.pathname.match(/^\/(?:ticker|etf|crypto)\/([^/]+)/);
   return m ? m[1].toUpperCase() : null;
+}
+
+async function fetchAssetInfo(ticker) {
+  const response = await fetch(`/api/ticker-info?ticker=${encodeURIComponent(ticker)}`);
+  if (!response.ok) throw new Error(`Server error ${response.status}`);
+  const data = await response.json();
+  if (data.error) throw new Error(data.error);
+  return data;
 }
 
 function setRoute(route, replace = false) {
   state.route = route;
+  if (route !== "markets") {
+    setMacroShellVisibleModule(false);
+    setPredictionShellVisibleModule(false);
+  }
+  if (route !== "ticker") {
+    void stopTickerPageLiveSession();
+  }
   $$(".page").forEach((page) => page.classList.remove("active"));
   $(`#${route}-page`).classList.add("active");
   $("#page-back-row")?.classList.toggle("hidden", route !== "ticker");
-  $$(".nav a").forEach((link) => {
+  $$(".nav a, .nav button[data-route]").forEach((link) => {
     link.classList.toggle("active", link.dataset.route === route);
   });
   $$(".nav-group").forEach((group) => {
@@ -1062,31 +2424,121 @@ function setRoute(route, replace = false) {
     const routes = Array.from(group.querySelectorAll("[data-route]")).map((link) => link.dataset.route);
     parent.classList.toggle("active", routes.includes(route));
   });
+  if (route !== "markets") {
+    $$(".nav-group-markets [data-markets-sub]").forEach((link) => link.classList.remove("active"));
+    $$(".nav-group-markets [data-prediction-tab]").forEach((link) => link.classList.remove("active"));
+  }
   if (!replace && route !== "ticker") history.pushState({}, "", `/${route}`);
   if (route !== "ticker") state.tickerBackPath = null;
-  $(".results").classList.toggle("hidden", route === "dashboard" || route === "option-screener");
+  const resultsVisibleRoutes = new Set(["screener", "dcf"]);
+  $(".results").classList.toggle("hidden", !resultsVisibleRoutes.has(route));
   if (state.llmOpen) updateLlmContextBar();
 }
 
+function openMarkets(sub = "most_active", replace = false, macroTab = null, predictionTab = null) {
+  const cleanSub = sub || "most_active";
+  state.marketsSub = cleanSub;
+  if (cleanSub === "macro") {
+    state.marketsMacroTab = macroTab || state.marketsMacroTab || "gdp";
+    setPredictionShellVisibleModule(false);
+  } else if (cleanSub === "prediction") {
+    state.marketsPredictionTab = normalizePredictionTab(
+      predictionTab || macroTab || state.marketsPredictionTab || "all"
+    );
+    setMacroShellVisibleModule(false);
+  } else {
+    setMacroShellVisibleModule(false);
+    setPredictionShellVisibleModule(false);
+  }
+  $$(".nav-group-markets [data-markets-sub]").forEach((link) => {
+    if (cleanSub === "macro" && link.dataset.macroTab) {
+      link.classList.toggle("active", link.dataset.macroTab === state.marketsMacroTab);
+      return;
+    }
+    link.classList.toggle("active", link.dataset.marketsSub === cleanSub);
+  });
+  $$(".nav-group-markets [data-macro-tab]").forEach((link) => {
+    link.classList.toggle(
+      "active",
+      cleanSub === "macro" && link.dataset.macroTab === state.marketsMacroTab
+    );
+  });
+  $$(".nav-group-markets [data-prediction-tab]").forEach((link) => {
+    link.classList.toggle(
+      "active",
+      cleanSub === "prediction" && normalizePredictionTab(link.dataset.predictionTab) === state.marketsPredictionTab
+    );
+  });
+  setRoute("markets", true);
+  const params = new URLSearchParams();
+  params.set("sub", cleanSub);
+  if (cleanSub === "macro") params.set("tab", state.marketsMacroTab);
+  if (cleanSub === "prediction") params.set("tab", state.marketsPredictionTab);
+  const url = `/markets?${params.toString()}`;
+  if (replace) history.replaceState({}, "", url);
+  else history.pushState({}, "", url);
+  if (cleanSub === "prediction") {
+    runPredictionMarkets(state.marketsPredictionTab);
+    return;
+  }
+  runMarkets(cleanSub, state.marketsMacroTab);
+}
+
 // ── Ticker landing page ────────────────────────────────────
-function openTickerPage(ticker, name) {
-  state.tickerBackPath = `${location.pathname}${location.search}`;
+async function openTickerPage(ticker, name, options = {}) {
+  const pushHistory = options.pushHistory !== false;
+  const backPath = options.backPath ?? `${location.pathname}${location.search}`;
+  const initialKind = options.assetType || assetTypeFromPath() || "stock";
+
+  await stopTickerPageLiveSession();
+
+  state.tickerBackPath = backPath;
   state.ticker = ticker;
   state.tickerName = name || ticker;
+  state.assetType = initialKind;
   state.tickerMainTab = "chart";
   state.tickerView = "income_statement";
   state.tickerFinancialsData = null;
   state.tickerFinancialsAsPercent = false;
   state.compareTickers = [];
 
-  $("#ticker-eyebrow").textContent = ticker;
-  $("#ticker-heading").textContent = name || ticker;
+  $("#ticker-heading").textContent = state.tickerName;
   renderTickerWatchlistMenu();
-
-  setTickerMainTab("chart");
-  history.pushState({ tickerBackPath: state.tickerBackPath }, "", `/ticker/${ticker}`);
   setRoute("ticker", true);
+  setTickerMainTab("chart");
+
+  const provisionalPath = `/${initialKind === "etf" ? "etf" : initialKind === "crypto" ? "crypto" : "ticker"}/${ticker}`;
+  if (pushHistory) history.pushState({ tickerBackPath: state.tickerBackPath }, "", provisionalPath);
+  else if (location.pathname !== provisionalPath) history.replaceState({ tickerBackPath: state.tickerBackPath }, "", provisionalPath);
+
   runTickerChart();
+  void syncTickerHeaderLive();
+
+  try {
+    const info = await fetchAssetInfo(ticker);
+    const assetType = String(info.asset_type || "").toUpperCase();
+    const resolvedKind = assetType === "ETF" ? "etf" : assetType === "CRYPTOCURRENCY" ? "crypto" : "stock";
+    state.assetType = resolvedKind;
+    state.tickerName = info.name || state.tickerName || ticker;
+    $("#ticker-heading").textContent = state.tickerName;
+    $("#ticker-eyebrow").textContent = resolvedKind === "etf" ? "ETF" : resolvedKind === "crypto" ? "Crypto" : "Ticker";
+    renderTickerWatchlistMenu();
+    syncTickerPageMode();
+    if (resolvedKind !== initialKind) {
+      const resolvedPath = `/${resolvedKind === "etf" ? "etf" : resolvedKind === "crypto" ? "crypto" : "ticker"}/${ticker}`;
+      history.replaceState({ tickerBackPath: state.tickerBackPath }, "", resolvedPath);
+    }
+    setTickerMainTab(state.tickerMainTab || "chart");
+    if (state.assetType === "etf" && state.tickerMainTab === "holdings") {
+      runTickerHoldings();
+    }
+    if (state.assetType === "crypto" && state.tickerMainTab === "addresses") {
+      runCryptoAddresses();
+    }
+    void syncTickerHeaderLive();
+  } catch {
+    // Keep the optimistic page render if info lookup fails.
+  }
 }
 
 function goBackFromTicker() {
@@ -1094,49 +2546,117 @@ function goBackFromTicker() {
     history.back();
     return;
   }
-  setRoute("markets");
-  runMarkets(state.marketsSub || "most_active");
+  openMarkets(state.marketsSub || "most_active", true, state.marketsMacroTab, state.marketsPredictionTab);
 }
 
 function setTickerMainTab(tab) {
-  state.tickerMainTab = tab;
+  const normalized = normalizeTickerMainTab(tab);
+  state.tickerMainTab = normalized;
+  syncTickerPageMode();
   $$(".ticker-main-tab").forEach((btn) =>
-    btn.classList.toggle("active", btn.dataset.mainTab === tab)
+    btn.classList.toggle("active", btn.dataset.mainTab === normalized)
   );
   $$(".ticker-view").forEach((view) => view.classList.remove("active"));
-  $(`#ticker-${tab}-view`).classList.add("active");
+  $(`#ticker-${normalized}-view`)?.classList.add("active");
 
   // Show results table only for financials tab
-  $(".results").classList.toggle("hidden", tab !== "financials");
+  const showResults = state.assetType !== "etf" && normalized === "financials";
+  $(".results").classList.toggle("hidden", !showResults);
   if (state.llmOpen) updateLlmContextBar();
+  if (state.route === "ticker") void syncTickerHeaderLive();
+}
+
+function normalizeTickerMainTab(tab) {
+  const allowed = state.assetType === "etf"
+    ? new Set(["chart", "options", "dividends", "holdings", "info"])
+    : state.assetType === "crypto"
+      ? new Set(["chart", "addresses", "info"])
+      : new Set(["chart", "financials", "options", "earnings", "dividends", "info", "insider"]);
+  if (allowed.has(tab)) return tab;
+  return "chart";
+}
+
+function syncTickerPageMode() {
+  const isEtf = state.assetType === "etf";
+  const isCrypto = state.assetType === "crypto";
+  const activeTab = normalizeTickerMainTab(state.tickerMainTab);
+  state.tickerMainTab = activeTab;
+  $("#ticker-eyebrow").textContent = isEtf ? "ETF" : isCrypto ? "Crypto" : "Ticker";
+
+  const visibleTabs = isEtf
+    ? new Set(["chart", "options", "dividends", "holdings", "info"])
+    : isCrypto
+      ? new Set(["chart", "addresses", "info"])
+      : new Set(["chart", "financials", "options", "earnings", "dividends", "info", "insider"]);
+
+  $$(".ticker-main-tab").forEach((btn) => {
+    const tab = btn.dataset.mainTab;
+    const show = visibleTabs.has(tab);
+    btn.classList.toggle("hidden", !show);
+    btn.classList.toggle("active", tab === activeTab && show);
+  });
+
+  $$(".ticker-view").forEach((view) => {
+    const tab = view.id.replace(/^ticker-/, "").replace(/-view$/, "");
+    const show = visibleTabs.has(tab);
+    view.classList.toggle("hidden", !show);
+    if (!show) view.classList.remove("active");
+  });
+
 }
 
 // Chart tab
 async function runTickerChart() {
   const ticker = state.ticker;
   if (!ticker) return;
-  const period     = state.chartPeriod   || "1mo";
-  const interval   = state.chartInterval || "1d";
-  const comparing  = state.compareTickers.length > 0;
-  const needsInds  = !comparing && state.indicators.size > 0;
+  const period = state.chartPeriod || "1mo";
+  const interval = state.chartInterval || chartIntervalForPeriod(period);
+  const comparing = state.compareTickers.length > 0;
+  const needsInds = !comparing && state.indicators.size > 0;
+  const liveMode = state.chartLive || state.chartLivePendingStart;
+  const forceRefresh = false;
 
   const wrap = $("#ticker-chart-wrap");
-  wrap.innerHTML = `<div class="chart-loading">Loading…</div>`;
-  // Remove any previous subchart panels
+  const hasExistingChart = wrap && wrap.querySelector("svg");
+  if (!liveMode || !hasExistingChart) {
+    wrap.innerHTML = `<div class="chart-loading">Loading…</div>`;
+  } else {
+    wrap.classList.add("chart-refreshing");
+  }
+  state.chartRows = [];
+  clearChartAnalysis();
+  updateAnalyzeButtonState();
+  updateLiveButtonState();
+  // Remove any previous subchart panels before rebuilding them.
   $$(".subchart-wrap").forEach((el) => el.remove());
   renderCompareTiles();
 
   try {
-    const rows = await fetchCandleRows(ticker, period, interval, needsInds);
+    const candleData = await fetchCandleRows(
+      ticker,
+      period,
+      interval,
+      needsInds,
+      forceRefresh,
+      state.chartLive || state.chartLivePendingStart || state.tickerHeaderLive || state.tickerHeaderLivePending ? "live" : "normal"
+    );
+    const rows = candleData.rows || [];
+    state.chartLiveQuote = candleData.live_quote || null;
+    state.chartRows = rows;
+    updateTickerHeaderPrice(rows, state.chartLiveQuote);
+    const displayRows = liveMode ? rows.slice(-currentChartLookback()) : rows;
 
     if (comparing) {
       const compareSeries = await Promise.all(
         state.compareTickers.map(async (item) => ({
           ...item,
-          rows: await fetchCandleRows(item.ticker, period, interval, false),
+          rows: (await fetchCandleRows(item.ticker, period, interval, false, forceRefresh)).rows || [],
         }))
       );
       renderCompareChart(rows, wrap, compareSeries);
+      wrap.classList.remove("chart-refreshing");
+      updateAnalyzeButtonState();
+      updateTickerHeaderPrice(rows, state.chartLiveQuote);
       return;
     }
 
@@ -1147,7 +2667,15 @@ async function runTickerChart() {
       (k) => INDICATOR_DEFS[k]?.group === "panel"
     );
 
-    renderCandleChart(rows, wrap, activeOverlays);
+    renderCandleChart(
+      displayRows,
+      wrap,
+      activeOverlays,
+      state.chartAnalysis?.rectangles || [],
+      state.chartAnalysisSelectedIndex ?? -1,
+      state.chartLiveQuote
+    );
+    wrap.classList.remove("chart-refreshing");
 
     // Append subchart panels after the main chart wrap
     const chartView = $("#ticker-chart-view");
@@ -1159,23 +2687,55 @@ async function runTickerChart() {
       lbl.textContent = key.toUpperCase();
       panel.appendChild(lbl);
       chartView.appendChild(panel);
-      renderSubchart(rows, panel, key);
+      renderSubchart(displayRows, panel, key);
     });
+    updateAnalyzeButtonState();
+    updateLiveButtonState();
+    updateTickerHeaderPrice(rows, state.chartLiveQuote);
   } catch (err) {
+    wrap.classList.remove("chart-refreshing");
     wrap.innerHTML = `<div class="chart-empty">${escapeHtml(err.message)}</div>`;
+    updateTickerHeaderPrice();
+    updateAnalyzeButtonState();
+    updateLiveButtonState();
   }
 }
 
-async function fetchCandleRows(ticker, period, interval, indicators) {
+async function fetchCandleRows(ticker, period, interval, indicators, forceRefresh = false, cacheMode = null) {
+  const useLiveCache = Boolean(
+    cacheMode === "live" ||
+    state.chartLive ||
+    state.chartLivePendingStart
+  );
   const res = await fetch("/api/candles", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ticker, period, interval, indicators }),
+    body: JSON.stringify({
+      ticker,
+      period,
+      interval,
+      indicators,
+      force_refresh: forceRefresh,
+      cache_mode: useLiveCache ? "live" : "normal",
+    }),
   });
   if (!res.ok) throw new Error(`Server error ${res.status}`);
   const data = await res.json();
   if (data.error) throw new Error(data.error);
-  return data.rows || [];
+  return data;
+}
+
+function chartIntervalForPeriod(period) {
+  if (period === "1d") return "1m";
+  if (period === "5d") return "5m";
+  if (period === "5y" || period === "max") return "1wk";
+  return "1d";
+}
+
+function chartHoverLabel(row, period) {
+  const timestamp = row?.date ? String(row.date).replace("T", " ").slice(0, 16) : "—";
+  if (period === "1d" || period === "5d") return timestamp;
+  return String(row?.date || "—").slice(0, 10);
 }
 
 function normalizedPerformanceRows(rows) {
@@ -1381,7 +2941,7 @@ function renderCompareChart(mainRows, container, compareSeries) {
   container.appendChild(svg);
 }
 
-function renderCandleChart(rows, container, activeOverlays = []) {
+function renderCandleChart(rows, container, activeOverlays = [], analysisRects = [], activeAnalysisIndex = -1, liveQuote = null) {
   container.innerHTML = "";
   if (!rows.length) {
     container.innerHTML = '<div class="chart-empty">No data available.</div>';
@@ -1393,14 +2953,22 @@ function renderCandleChart(rows, container, activeOverlays = []) {
   const pL = 62, pR = 18, pT = 16, pB = 36, volH = 44;
   const priceH = H - pT - pB - volH - 6;
   const n = rows.length;
+  const isLiveView = state.chartLive || state.chartLivePendingStart;
+  const liveLeftPad = isLiveView ? 64 : 0;
+  const liveRightPad = isLiveView ? 84 : 0;
+  const chartSpan = Math.max(1, W - pL - pR - liveLeftPad - liveRightPad);
 
-  const closes  = rows.map((r) => Number(r.close));
+  const closes = rows.map((r) => Number(r.close));
   const volumes = rows.map((r) => Number(r.volume));
+  const livePrice = Number(liveQuote?.price);
 
   // Expand price range to include any active overlay values so lines stay in-bounds
-  const OVERLAY_COLS = { sma_20: 1, sma_50: 1, sma_200: 1, ema_12: 1, ema_26: 1,
-                         bb_upper: 1, bb_middle: 1, bb_lower: 1 };
+  const OVERLAY_COLS = {
+    sma_20: 1, sma_50: 1, sma_200: 1, ema_12: 1, ema_26: 1,
+    bb_upper: 1, bb_middle: 1, bb_lower: 1
+  };
   let allPrices = [...closes];
+  if (Number.isFinite(livePrice) && livePrice > 0) allPrices.push(livePrice);
   if (activeOverlays.length) {
     const cols = activeOverlays.includes("bb")
       ? activeOverlays.filter((k) => k !== "bb").concat(["bb_upper", "bb_lower"])
@@ -1418,7 +2986,7 @@ function renderCandleChart(rows, container, activeOverlays = []) {
   const rangeP = maxP - minP || 1;
   const maxV = Math.max(...volumes) || 1;
 
-  const xPos  = (i) => pL + (i / Math.max(n - 1, 1)) * (W - pL - pR);
+  const xPos = (i) => pL + liveLeftPad + (i / Math.max(n - 1, 1)) * chartSpan;
   const yPrice = (p) => pT + priceH - ((p - minP) / rangeP) * priceH;
   const yVolBase = H - pB;
 
@@ -1444,7 +3012,7 @@ function renderCandleChart(rows, container, activeOverlays = []) {
     const y = yPrice(price);
     const g = document.createElementNS(NS, "line");
     g.setAttribute("x1", pL); g.setAttribute("x2", W - pR);
-    g.setAttribute("y1", y);  g.setAttribute("y2", y);
+    g.setAttribute("y1", y); g.setAttribute("y2", y);
     g.setAttribute("stroke", "#1F1F1F"); g.setAttribute("stroke-width", "1");
     svg.appendChild(g);
     const label = document.createElementNS(NS, "text");
@@ -1458,7 +3026,7 @@ function renderCandleChart(rows, container, activeOverlays = []) {
   });
 
   // Volume bars
-  const barW = Math.max(1, (W - pL - pR) / n - 1);
+  const barW = Math.max(1, chartSpan / n - 1);
   rows.forEach((r, i) => {
     const bh = (Number(r.volume) / maxV) * volH;
     const rect = document.createElementNS(NS, "rect");
@@ -1477,6 +3045,60 @@ function renderCandleChart(rows, container, activeOverlays = []) {
   area.setAttribute("d", `${lineD}L${xPos(n - 1)},${pT + priceH}L${pL},${pT + priceH}Z`);
   area.setAttribute("fill", "url(#cag)");
   svg.appendChild(area);
+
+  analysisRects.forEach((rectSpec, rectIndex) => {
+    const start = Math.max(0, Math.min(n - 1, rectSpec.startIndex ?? 0));
+    const end = Math.max(start, Math.min(n - 1, rectSpec.endIndex ?? start));
+    const slice = rows.slice(start, end + 1);
+    const highs = slice.map((r) => Number(r.high)).filter((v) => Number.isFinite(v));
+    const lows = slice.map((r) => Number(r.low)).filter((v) => Number.isFinite(v));
+    if (!highs.length || !lows.length) return;
+    const x1 = xPos(start) - barW / 2 - 2;
+    const x2 = xPos(end) + barW / 2 + 2;
+    const y1 = yPrice(Math.max(...highs)) - 4;
+    const y2 = yPrice(Math.min(...lows)) + 4;
+    const left = Math.min(x1, x2);
+    const top = Math.min(y1, y2);
+    const width = Math.max(4, Math.abs(x2 - x1));
+    const height = Math.max(4, Math.abs(y2 - y1));
+    const rect = document.createElementNS(NS, "rect");
+    rect.setAttribute("x", left);
+    rect.setAttribute("y", top);
+    rect.setAttribute("width", width);
+    rect.setAttribute("height", height);
+    const isActive = rectIndex === activeAnalysisIndex;
+    rect.setAttribute("fill", isActive ? "rgba(255, 75, 75, 0.16)" : "rgba(255, 59, 59, 0.08)");
+    rect.setAttribute("stroke", isActive ? "#FFB3B3" : "#FF4B4B");
+    rect.setAttribute("stroke-width", isActive ? "2.2" : "1.4");
+    rect.setAttribute("rx", "0");
+    svg.appendChild(rect);
+
+    const label = String(rectSpec.label || rectSpec.title || "Pattern");
+    const labelText = label.length > 24 ? `${label.slice(0, 24)}…` : label;
+    const labelChars = Math.max(labelText.length, 3);
+    const labelW = Math.min(width - 8, Math.max(52, labelChars * 6.1 + 14));
+    const labelH = 16;
+    const labelX = left + 4;
+    const labelY = top + 4;
+    const labelBg = document.createElementNS(NS, "rect");
+    labelBg.setAttribute("x", labelX);
+    labelBg.setAttribute("y", labelY);
+    labelBg.setAttribute("width", labelW);
+    labelBg.setAttribute("height", labelH);
+    labelBg.setAttribute("fill", isActive ? "#ff4b4b" : "#b33b3b");
+    labelBg.setAttribute("opacity", isActive ? "0.98" : "0.92");
+    svg.appendChild(labelBg);
+    const labelTxt = document.createElementNS(NS, "text");
+    labelTxt.setAttribute("x", labelX + 6);
+    labelTxt.setAttribute("y", labelY + 11);
+    labelTxt.setAttribute("fill", "#FFFFFF");
+    labelTxt.setAttribute("font-size", "9");
+    labelTxt.setAttribute("font-family", "JetBrains Mono, monospace");
+    labelTxt.setAttribute("font-weight", "700");
+    labelTxt.setAttribute("text-anchor", "start");
+    labelTxt.textContent = labelText.toUpperCase();
+    svg.appendChild(labelTxt);
+  });
 
   // ── Overlay lines ──────────────────────────────────────────
   function makePath(col, color, width = 1.2, dash = "") {
@@ -1507,17 +3129,17 @@ function renderCandleChart(rows, container, activeOverlays = []) {
     fill.setAttribute("fill", "rgba(179,136,255,0.07)");
     fill.setAttribute("stroke", "none");
     svg.appendChild(fill);
-    makePath("bb_upper",  "#B388FF", 1.0, "4 3");
-    makePath("bb_lower",  "#B388FF", 1.0, "4 3");
+    makePath("bb_upper", "#B388FF", 1.0, "4 3");
+    makePath("bb_lower", "#B388FF", 1.0, "4 3");
     makePath("bb_middle", "#B388FF", 0.8);
   }
 
   const SIMPLE_OVERLAYS = [
-    ["sma_20",  "#4FC3F7"],
-    ["sma_50",  "#FFB800"],
+    ["sma_20", "#4FC3F7"],
+    ["sma_50", "#FFB800"],
     ["sma_200", "#FF4B4B"],
-    ["ema_12",  "#00E5A0"],
-    ["ema_26",  "#FF8A65"],
+    ["ema_12", "#00E5A0"],
+    ["ema_26", "#FF8A65"],
   ];
   SIMPLE_OVERLAYS.forEach(([col, color]) => {
     if (activeOverlays.includes(col)) makePath(col, color);
@@ -1540,20 +3162,21 @@ function renderCandleChart(rows, container, activeOverlays = []) {
     lbl.setAttribute("fill", "#3A3734");
     lbl.setAttribute("font-size", "10");
     lbl.setAttribute("font-family", "JetBrains Mono, monospace");
-    lbl.textContent = String(rows[i].date).slice(0, 10);
+    lbl.textContent = String(rows[i].date).slice(0, isLiveView ? 16 : 10);
     svg.appendChild(lbl);
   });
 
   // Current price tag
-  const lastClose = closes[n - 1];
+  const lastClose = Number.isFinite(livePrice) && livePrice > 0 ? livePrice : closes[n - 1];
   const tagY = yPrice(lastClose);
   const tag = document.createElementNS(NS, "rect");
-  tag.setAttribute("x", W - pR - 58); tag.setAttribute("y", tagY - 9);
+  const tagX = Math.min(W - pR - 58, xPos(n - 1) + 10);
+  tag.setAttribute("x", tagX); tag.setAttribute("y", tagY - 9);
   tag.setAttribute("width", 56); tag.setAttribute("height", 17);
   tag.setAttribute("fill", "#C8FF00");
   svg.appendChild(tag);
   const tagTxt = document.createElementNS(NS, "text");
-  tagTxt.setAttribute("x", W - pR - 30); tagTxt.setAttribute("y", tagY + 4);
+  tagTxt.setAttribute("x", tagX + 28); tagTxt.setAttribute("y", tagY + 4);
   tagTxt.setAttribute("text-anchor", "middle");
   tagTxt.setAttribute("fill", "#000");
   tagTxt.setAttribute("font-size", "10");
@@ -1597,11 +3220,14 @@ function renderCandleChart(rows, container, activeOverlays = []) {
     crossV.setAttribute("x1", x); crossV.setAttribute("x2", x);
     crossV.style.display = "";
 
-    const txt = `${String(row.date).slice(0, 10)}  ${price.toFixed(2)}`;
+    const liveQuoteText = Number.isFinite(livePrice) && i === n - 1
+      ? `  live ${livePrice.toFixed(2)}`
+      : "";
+    const txt = `${chartHoverLabel(row, state.chartPeriod)}  ${price.toFixed(2)}${liveQuoteText}`;
     tooltipTxt.textContent = txt;
     const tw = txt.length * 7 + 12;
     const th = 20;
-    const tx = Math.min(x + 8, W - pR - tw - 4);
+    const tx = Math.min(x + 8, W - pR - tw - 4 - liveRightPad);
     tooltipBg.setAttribute("x", tx); tooltipBg.setAttribute("y", pT);
     tooltipBg.setAttribute("width", tw); tooltipBg.setAttribute("height", th);
     tooltipTxt.setAttribute("x", tx + 6); tooltipTxt.setAttribute("y", pT + 13);
@@ -1640,7 +3266,7 @@ function renderSubchart(rows, container, type) {
   function hline(y, color = "#1F1F1F", dash = "") {
     const l = document.createElementNS(NS, "line");
     l.setAttribute("x1", pL); l.setAttribute("x2", W - pR);
-    l.setAttribute("y1", y);  l.setAttribute("y2", y);
+    l.setAttribute("y1", y); l.setAttribute("y2", y);
     l.setAttribute("stroke", color); l.setAttribute("stroke-width", "1");
     if (dash) l.setAttribute("stroke-dasharray", dash);
     svg.appendChild(l);
@@ -1679,15 +3305,15 @@ function renderSubchart(rows, container, type) {
     // Dashed reference line to the tag
     const ref = document.createElementNS(NS, "line");
     ref.setAttribute("x1", pL); ref.setAttribute("x2", tx);
-    ref.setAttribute("y1", y);  ref.setAttribute("y2", y);
+    ref.setAttribute("y1", y); ref.setAttribute("y2", y);
     ref.setAttribute("stroke", color);
     ref.setAttribute("stroke-width", "0.5");
     ref.setAttribute("stroke-dasharray", "3 3");
     ref.setAttribute("opacity", "0.5");
     svg.appendChild(ref);
     const bg = document.createElementNS(NS, "rect");
-    bg.setAttribute("x", tx);        bg.setAttribute("y", y - th / 2);
-    bg.setAttribute("width", tw);    bg.setAttribute("height", th);
+    bg.setAttribute("x", tx); bg.setAttribute("y", y - th / 2);
+    bg.setAttribute("width", tw); bg.setAttribute("height", th);
     bg.setAttribute("fill", color);
     svg.appendChild(bg);
     const t = document.createElementNS(NS, "text");
@@ -1709,11 +3335,11 @@ function renderSubchart(rows, container, type) {
   }
 
   if (type === "macd") {
-    const macd  = rows.map((r) => r.macd       != null ? Number(r.macd)       : null);
-    const sig   = rows.map((r) => r.macd_signal != null ? Number(r.macd_signal) : null);
-    const hist  = rows.map((r) => r.macd_histogram != null ? Number(r.macd_histogram) : null);
-    const allV  = [...macd, ...sig, ...hist].filter((v) => v != null);
-    const minV  = Math.min(...allV), maxV = Math.max(...allV);
+    const macd = rows.map((r) => r.macd != null ? Number(r.macd) : null);
+    const sig = rows.map((r) => r.macd_signal != null ? Number(r.macd_signal) : null);
+    const hist = rows.map((r) => r.macd_histogram != null ? Number(r.macd_histogram) : null);
+    const allV = [...macd, ...sig, ...hist].filter((v) => v != null);
+    const minV = Math.min(...allV), maxV = Math.max(...allV);
     const zeroY = yScale(0, minV, maxV);
 
     hline(zeroY, "#252525");
@@ -1734,12 +3360,12 @@ function renderSubchart(rows, container, type) {
       svg.appendChild(rect);
     });
 
-    pathFrom(sig,  minV, maxV, "#FF8A65", 1.2);
+    pathFrom(sig, minV, maxV, "#FF8A65", 1.2);
     pathFrom(macd, minV, maxV, "#4FC3F7", 1.4);
 
     const lastMacd = lastValid(macd);
-    const lastSig  = lastValid(sig);
-    if (lastSig  != null) valueTag(lastSig,  yScale(lastSig,  minV, maxV), "#FF8A65");
+    const lastSig = lastValid(sig);
+    if (lastSig != null) valueTag(lastSig, yScale(lastSig, minV, maxV), "#FF8A65");
     if (lastMacd != null) valueTag(lastMacd, yScale(lastMacd, minV, maxV), "#4FC3F7");
 
   } else if (type === "rsi") {
@@ -1801,7 +3427,7 @@ function renderSubchart(rows, container, type) {
 // ── Indicator chip wiring ──────────────────────────────────
 function bindIndicatorChips() {
   $$(".ind-chip").forEach((chip) => {
-    const key   = chip.dataset.indicator;
+    const key = chip.dataset.indicator;
     const color = chip.dataset.color;
     chip.style.setProperty("--ind-color", color);
     chip.addEventListener("click", () => {
@@ -1841,6 +3467,7 @@ function renderCompareTiles() {
       removeCompareTicker(btn.dataset.compareRemove);
     });
   });
+  updateAnalyzeButtonState();
 }
 
 function addCompareTicker(ticker, name) {
@@ -1960,6 +3587,10 @@ function bindTickerPage() {
       if (tab === "chart") runTickerChart();
       if (tab === "financials") runTickerFinancials();
       if (tab === "options") runTickerOptions();
+      if (tab === "earnings") runTickerEarnings();
+      if (tab === "dividends") runTickerDividends();
+      if (tab === "holdings") runTickerHoldings();
+      if (tab === "addresses") runCryptoAddresses();
       if (tab === "info") runTickerInfo();
       if (tab === "insider") runTickerInsider();
     });
@@ -1970,14 +3601,50 @@ function bindTickerPage() {
     btn.addEventListener("click", () => {
       $$(".chart-range").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
-      state.chartPeriod   = btn.dataset.period;
-      state.chartInterval = btn.dataset.interval;
+      state.chartPeriod = btn.dataset.period;
+      state.chartInterval = btn.dataset.interval || chartIntervalForPeriod(btn.dataset.period);
       runTickerChart();
     });
   });
 
   $("#ticker-options-fetch-dte")?.addEventListener("change", () => {
     if (state.route === "ticker" && state.tickerMainTab === "options") runTickerOptions();
+  });
+
+  $("#chart-analyze-btn")?.addEventListener("click", () => {
+    void runChartAnalysis();
+  });
+
+  $("#chart-live-btn")?.addEventListener("click", async () => {
+    if (state.chartLive || state.chartLivePendingStart) {
+      await stopChartLive(true);
+      return;
+    }
+    state.chartLivePrevPeriod = state.chartPeriod || "1mo";
+    state.chartLivePrevInterval = state.chartInterval || "1d";
+    state.chartLivePendingStart = true;
+    updateLiveButtonState();
+    state.chartPeriod = "1d";
+    state.chartInterval = "1m";
+    $$(".chart-range").forEach((btn) => {
+      btn.classList.toggle(
+        "active",
+        btn.dataset.period === state.chartPeriod && btn.dataset.interval === state.chartInterval
+      );
+    });
+    clearChartAnalysis();
+    void startChartLive();
+  });
+
+  $("#chart-live-lookback")?.addEventListener("input", () => {
+    const input = $("#chart-live-lookback");
+    if (!input) return;
+    const value = Number(input.value);
+    if (!Number.isFinite(value)) return;
+    state.chartLiveLookback = Math.min(500, Math.max(10, Math.floor(value)));
+    if (state.chartLive || state.chartLivePendingStart) {
+      rerenderCurrentTickerChart();
+    }
   });
 
   bindTickerFinancialsControls();
@@ -2041,11 +3708,15 @@ function renderWatchlists() {
   const target = $("#watchlists");
   if (!target) return;
   target.innerHTML = "";
+  updateWatchlistStats();
 
   if (state.watchlists.length === 0) {
     const empty = document.createElement("div");
     empty.className = "watchlist-empty";
-    empty.textContent = "No watchlists yet.";
+    empty.innerHTML = `
+      <p class="watchlist-empty-title">No watchlists yet.</p>
+      <p class="watchlist-empty-copy">Start with a manual list on the left or import a CSV to seed your first compare set.</p>
+    `;
     target.appendChild(empty);
     return;
   }
@@ -2053,22 +3724,53 @@ function renderWatchlists() {
   state.watchlists.forEach((watchlist) => {
     const item = document.createElement("article");
     item.className = "watchlist-item";
+    item.draggable = true;
+    item.dataset.watchlistId = watchlist.id;
     const expanded = state.expandedWatchlists.has(watchlist.id);
-    const tickers = expanded ? watchlist.tickers : watchlist.tickers.slice(0, 80);
-    const hiddenCount = Math.max(watchlist.tickers.length - tickers.length, 0);
+    const previewTickers = expanded ? watchlist.tickers : watchlist.tickers.slice(0, 10);
+    const hiddenCount = Math.max(watchlist.tickers.length - previewTickers.length, 0);
     const toggleLabel = expanded ? "Condense" : "Expand";
+    const screenerReady = watchlist.tickers.length >= 1 ? "Ready" : "Empty";
     item.innerHTML = `
-      <div>
-        <p class="eyebrow">${watchlist.tickers.length} tickers</p>
-        <h2>${escapeHtml(watchlist.name)}</h2>
+      <div class="watchlist-card-main">
+        <div class="watchlist-card-head">
+          <div>
+            <p class="eyebrow">${watchlist.tickers.length} tickers</p>
+            <h2>${escapeHtml(watchlist.name)}</h2>
+          </div>
+          <div class="watchlist-card-badges">
+            <span class="watchlist-badge">${escapeHtml(screenerReady)}</span>
+            <span class="watchlist-badge">${expanded ? "Expanded" : "Compact"}</span>
+            <button class="watchlist-drag-handle" type="button" aria-label="Drag to reorder" title="Drag to reorder">⋮⋮</button>
+          </div>
+        </div>
+        <div class="watchlist-chip-row">
+          ${previewTickers.map((ticker) => `
+            <span class="watchlist-chip removable" data-chip-ticker="${escapeHtml(ticker)}">
+              <span>${escapeHtml(ticker)}</span>
+              <button type="button" class="watchlist-chip-remove" data-remove-ticker="${escapeHtml(ticker)}" aria-label="Remove ${escapeHtml(ticker)}">×</button>
+            </span>
+          `).join("")}
+          ${hiddenCount ? `<span class="watchlist-chip more">+${hiddenCount}</span>` : ""}
+        </div>
         <p class="watchlist-tickers ${expanded ? "expanded" : "condensed"}">
-          ${escapeHtml(tickers.join(", "))}
-          ${hiddenCount ? `<span> + ${hiddenCount} more</span>` : ""}
+          ${escapeHtml(watchlist.tickers.join(", "))}
         </p>
+        <form class="watchlist-inline-add" data-watchlist-add-form>
+          <input
+            class="watchlist-inline-input"
+            name="ticker"
+            type="text"
+            autocomplete="off"
+            placeholder="Add ticker"
+            aria-label="Add ticker to ${escapeHtml(watchlist.name)}"
+          />
+          <button type="submit" class="watchlist-inline-btn">Add</button>
+        </form>
       </div>
       <div class="watchlist-actions">
         <button class="secondary" type="button" data-action="toggle">${toggleLabel}</button>
-        <button type="button" data-action="multi">Multi</button>
+        <button type="button" data-action="multi">Compare</button>
         <button type="button" data-action="screener">Screener</button>
         <button type="button" data-action="dcf">DCF</button>
         <button class="secondary" type="button" data-action="edit">Edit</button>
@@ -2081,8 +3783,60 @@ function renderWatchlists() {
     item.querySelector('[data-action="dcf"]').addEventListener("click", () => applyWatchlist(watchlist, "dcf"));
     item.querySelector('[data-action="edit"]').addEventListener("click", () => editWatchlist(watchlist.id));
     item.querySelector('[data-action="delete"]').addEventListener("click", () => deleteWatchlist(watchlist.id));
+    item.querySelectorAll('[data-remove-ticker]').forEach((btn) => {
+      btn.addEventListener("click", () => removeTickerFromWatchlist(watchlist.id, btn.dataset.removeTicker));
+    });
+    item.querySelector('[data-watchlist-add-form]')?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const ticker = form.elements.ticker.value || "";
+      if (addTickerToWatchlist(watchlist.id, ticker)) {
+        form.reset();
+      }
+    });
+    item.addEventListener("dragstart", (event) => {
+      item.classList.add("dragging");
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", watchlist.id);
+    });
+    item.addEventListener("dragend", () => {
+      item.classList.remove("dragging");
+      $$(".watchlist-item.drag-over").forEach((el) => el.classList.remove("drag-over"));
+    });
+    item.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      if (!item.classList.contains("dragging")) item.classList.add("drag-over");
+    });
+    item.addEventListener("dragleave", () => {
+      item.classList.remove("drag-over");
+    });
+    item.addEventListener("drop", (event) => {
+      event.preventDefault();
+      item.classList.remove("drag-over");
+      const draggedId = event.dataTransfer.getData("text/plain");
+      if (draggedId && draggedId !== watchlist.id) reorderWatchlists(draggedId, watchlist.id);
+    });
     target.appendChild(item);
   });
+}
+
+function updateWatchlistStats() {
+  const totalEl = $("#watchlist-stat-total");
+  const tickersEl = $("#watchlist-stat-tickers");
+  const largestEl = $("#watchlist-stat-largest");
+  if (!totalEl || !tickersEl || !largestEl) return;
+  const total = state.watchlists.length;
+  const unique = new Set(
+    state.watchlists.flatMap((watchlist) => Array.isArray(watchlist.tickers) ? watchlist.tickers : [])
+  );
+  const largest = state.watchlists.reduce((max, watchlist) => {
+    const count = Array.isArray(watchlist.tickers) ? watchlist.tickers.length : 0;
+    return Math.max(max, count);
+  }, 0);
+  totalEl.textContent = String(total);
+  tickersEl.textContent = String(unique.size);
+  largestEl.textContent = String(largest);
 }
 
 function renderTickerWatchlistMenu() {
@@ -2123,14 +3877,39 @@ function renderTickerWatchlistMenu() {
 
 function addTickerToWatchlist(id, ticker) {
   const watchlist = state.watchlists.find((item) => item.id === id);
-  if (!watchlist) return;
+  if (!watchlist) return false;
   const current = Array.isArray(watchlist.tickers) ? watchlist.tickers : [];
   const cleaned = uniqueTickers([...current, ticker]);
-  if (cleaned.length === current.length) return;
+  if (cleaned.length === current.length) return false;
   watchlist.tickers = cleaned;
   saveWatchlists();
   renderWatchlists();
   setStatus(`${ticker} added to ${watchlist.name}.`, false);
+  return true;
+}
+
+function removeTickerFromWatchlist(id, ticker) {
+  const watchlist = state.watchlists.find((item) => item.id === id);
+  if (!watchlist) return;
+  const current = Array.isArray(watchlist.tickers) ? watchlist.tickers : [];
+  const cleaned = current.filter((item) => item !== String(ticker || "").trim().toUpperCase());
+  if (cleaned.length === current.length) return;
+  watchlist.tickers = cleaned;
+  saveWatchlists();
+  renderWatchlists();
+  setStatus(`${ticker} removed from ${watchlist.name}.`, false);
+}
+
+function reorderWatchlists(sourceId, targetId) {
+  const fromIndex = state.watchlists.findIndex((item) => item.id === sourceId);
+  const toIndex = state.watchlists.findIndex((item) => item.id === targetId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
+  const next = [...state.watchlists];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  state.watchlists = next;
+  saveWatchlists();
+  renderWatchlists();
 }
 
 function openTickerWatchlistMenu() {
@@ -2351,13 +4130,33 @@ function openDashboardMarket(sub) {
 }
 
 function bindNavigation() {
-  $$("[data-route]").forEach((link) => {
+  $$("[data-route], [data-markets-sub], [data-macro-tab], [data-prediction-tab]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
+      if (link.dataset.macroTab) {
+        openMarkets("macro", false, link.dataset.macroTab);
+        link.blur();
+        return;
+      }
+      if (link.dataset.predictionTab) {
+        openMarkets("prediction", false, link.dataset.predictionTab);
+        link.blur();
+        return;
+      }
+      if (link.dataset.marketsSub) {
+        openMarkets(link.dataset.marketsSub, false, link.dataset.macroTab || null);
+        link.blur();
+        return;
+      }
+      if (link.dataset.route === "markets") {
+        openMarkets(link.dataset.marketsSub || "most_active");
+        link.blur();
+        return;
+      }
       setRoute(link.dataset.route);
       if (link.dataset.route === "dashboard") runDashboard();
-      if (link.dataset.route === "markets") runMarkets(state.marketsSub || "most_active");
       if (link.dataset.route === "chat") initChat();
+      link.blur();
     });
   });
   $("#page-back-btn").addEventListener("click", goBackFromTicker);
@@ -2434,21 +4233,14 @@ async function streamLlmResponse(messages) {
         const token = obj.choices?.[0]?.delta?.content;
         if (token) {
           content += token;
-          const cursor = bubble.querySelector(".llm-cursor");
-          if (cursor) cursor.remove();
-          bubble.textContent = content;
-          const newCursor = document.createElement("span");
-          newCursor.className = "llm-cursor";
-          bubble.appendChild(newCursor);
+          renderStreamingMarkdown(bubble, content);
           $("#llm-messages").scrollTop = $("#llm-messages").scrollHeight;
         }
-      } catch {}
+      } catch { }
     }
   }
 
   reader.cancel();
-  const cursor = bubble.querySelector(".llm-cursor");
-  if (cursor) cursor.remove();
   bubble.innerHTML = renderMarkdown(content);
   $("#llm-messages").scrollTop = $("#llm-messages").scrollHeight;
   return content;
@@ -2607,6 +4399,8 @@ loadOptions().then(() => {
   bindOptionScreener();
   bindDashboard();
   bindMarkets();
+  bindMacroMarkets();
+  bindPredictionMarkets();
   bindTickerPage();
   bindIndicatorChips();
   bindCompareControls();
@@ -2620,14 +4414,11 @@ loadOptions().then(() => {
   if (route === "ticker") {
     const ticker = tickerFromPath();
     if (ticker) {
-      state.ticker = ticker;
-      state.tickerName = ticker;
-      $("#ticker-eyebrow").textContent = ticker;
-      $("#ticker-heading").textContent = ticker;
-      renderTickerWatchlistMenu();
-      setTickerMainTab("chart");
-      setRoute("ticker", true);
-      runTickerChart();
+      void openTickerPage(ticker, ticker, {
+        pushHistory: false,
+        backPath: null,
+        assetType: assetTypeFromPath(),
+      });
     } else {
       setRoute("dashboard", true);
       runDashboard();
@@ -2635,7 +4426,7 @@ loadOptions().then(() => {
   } else {
     setRoute(route, true);
     if (route === "dashboard") runDashboard();
-    if (route === "markets") runMarkets("most_active");
+    if (route === "markets") openMarkets(marketsSubFromPath() || "most_active", true, macroTabFromPath(), predictionTabFromPath());
     if (route === "chat") initChat();
   }
 
@@ -2644,24 +4435,23 @@ loadOptions().then(() => {
     if (r === "ticker") {
       const ticker = tickerFromPath();
       if (ticker) {
-        state.tickerBackPath = event.state?.tickerBackPath || null;
-        state.ticker = ticker;
-        $("#ticker-eyebrow").textContent = ticker;
-        $("#ticker-heading").textContent = ticker;
-        renderTickerWatchlistMenu();
-        setTickerMainTab(state.tickerMainTab || "chart");
-        setRoute("ticker", true);
-        if (state.tickerMainTab === "financials") runTickerFinancials();
-        else if (state.tickerMainTab === "options") runTickerOptions();
-        else if (state.tickerMainTab === "info") runTickerInfo();
-        else if (state.tickerMainTab === "insider") runTickerInsider();
-        else runTickerChart();
+        void openTickerPage(ticker, ticker, {
+          pushHistory: false,
+          backPath: event.state?.tickerBackPath || null,
+          assetType: assetTypeFromPath(),
+        });
       }
     } else {
       setRoute(r, true);
       if (r === "dashboard") runDashboard();
-      if (r === "markets") runMarkets(state.marketsSub || "most_active");
+      if (r === "markets") openMarkets(marketsSubFromPath() || "most_active", true, macroTabFromPath(), predictionTabFromPath());
       if (r === "chat") initChat();
+    }
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (state.chartLive || state.chartLivePendingStart) {
+      sendLiveStopBeacon(state.chartLiveTicker || state.ticker);
     }
   });
 });

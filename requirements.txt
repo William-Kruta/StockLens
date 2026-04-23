@@ -8,6 +8,7 @@ yfinance
 yahoors
 secrs
 insidertracker
+geckors
 macrotracker
 etftracker
 

@@ -3,17 +3,37 @@ import { $ } from "/modules/dom.js";
 import { escapeHtml } from "/modules/utils.js";
 import { renderOptionsTable } from "/modules/optionsTable.js";
 
-export async function runTickerInfo() {
+export async function runTickerInfo(forceRefresh = false) {
   const ticker = state.ticker;
   if (!ticker) return;
   const body = $("#ticker-info-body");
   body.innerHTML = `<div class="ticker-info-empty">Loading…</div>`;
   try {
-    const res = await fetch(`/api/ticker-info?ticker=${encodeURIComponent(ticker)}`);
+    const endpoint = state.assetType === "crypto" ? "crypto-info" : "ticker-info";
+    const params = new URLSearchParams({ ticker });
+    if (forceRefresh) params.set("refresh", "true");
+    const res = await fetch(`/api/${endpoint}?${params.toString()}`);
     if (!res.ok) throw new Error(`Server error ${res.status}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    renderTickerInfo(data);
+    if (state.assetType === "crypto") renderCryptoInfo(data);
+    else renderTickerInfo(data);
+  } catch (err) {
+    body.innerHTML = `<div class="ticker-info-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+export async function runCryptoAddresses() {
+  const ticker = state.ticker;
+  if (!ticker) return;
+  const body = $("#ticker-addresses-body");
+  body.innerHTML = `<div class="ticker-info-empty">Loading…</div>`;
+  try {
+    const res = await fetch(`/api/crypto-addresses?ticker=${encodeURIComponent(ticker)}`);
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderCryptoAddresses(data);
   } catch (err) {
     body.innerHTML = `<div class="ticker-info-empty">${escapeHtml(err.message)}</div>`;
   }
@@ -56,6 +76,78 @@ function renderTickerOptions(data, body) {
   renderOptionsTable(body, data);
 }
 
+function renderCryptoInfo(d) {
+  const body = $("#ticker-info-body");
+  const description = String(d.description || "").trim();
+  const updatedAt = formatCryptoUpdatedAt(d.updated_at);
+  const links = Array.isArray(d.links) ? d.links : [];
+  const linksHtml = links.length
+    ? `<div class="crypto-info-links">
+        ${links.map((item) => `
+          <a class="info-website" href="${escapeHtml(item.url || "#")}" target="_blank" rel="noopener">
+            ${escapeHtml(item.label || "Link")} ↗
+          </a>
+        `).join("")}
+      </div>`
+    : "";
+  body.innerHTML = `
+    <div class="info-card">
+      <div class="info-header">
+        <div class="info-header-left">
+          <div class="info-company-name">${escapeHtml(d.name || d.symbol || "—")}</div>
+          <div class="info-taxonomy">
+            <span>Crypto</span>
+            ${d.symbol ? `<span>${escapeHtml(d.symbol)}</span>` : ""}
+          </div>
+        </div>
+        <div class="crypto-info-actions">
+          <button
+            class="crypto-info-refresh-btn"
+            id="crypto-info-refresh-btn"
+            type="button"
+            aria-label="Refresh crypto info"
+            title="Refresh"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+              <path d="M20 4v5h-5" />
+            </svg>
+          </button>
+          ${linksHtml}
+        </div>
+      </div>
+
+      <div class="info-meta">
+        <div class="info-meta-item">
+          <span class="info-meta-label">Symbol</span>
+          <span class="info-meta-value">${escapeHtml(d.symbol || "—")}</span>
+        </div>
+        <div class="info-meta-item">
+          <span class="info-meta-label">CoinGecko ID</span>
+          <span class="info-meta-value">${escapeHtml(d.id || "—")}</span>
+        </div>
+        <div class="info-meta-item">
+          <span class="info-meta-label">Circulating Supply</span>
+          <span class="info-meta-value">${escapeHtml(formatCryptoSupply(d.circulating_supply))}</span>
+          ${updatedAt ? `<span class="crypto-info-note">Updated ${escapeHtml(updatedAt)}</span>` : ""}
+        </div>
+        <div class="info-meta-item">
+          <span class="info-meta-label">Max Supply</span>
+          <span class="info-meta-value">${escapeHtml(formatCryptoSupply(d.max_supply))}</span>
+        </div>
+      </div>
+
+      ${description ? `
+      <div>
+        <div class="info-summary-label">Description</div>
+        <p class="info-summary-text">${escapeHtml(description)}</p>
+      </div>` : ""}
+    </div>`;
+  $("#crypto-info-refresh-btn")?.addEventListener("click", () => {
+    runTickerInfo(true);
+  });
+}
+
 function renderTickerInfo(d) {
   const body = $("#ticker-info-body");
 
@@ -81,13 +173,31 @@ function renderTickerInfo(d) {
             ${taxonomy.map((t) => `<span>${escapeHtml(t)}</span>`).join("")}
           </div>
         </div>
-        ${websiteHtml}
+        <div class="info-header-actions">
+          <button
+            class="info-refresh-btn"
+            id="ticker-info-refresh-btn"
+            type="button"
+            aria-label="Refresh stock info"
+            title="Refresh"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+              <path d="M20 4v5h-5" />
+            </svg>
+          </button>
+          ${websiteHtml}
+        </div>
       </div>
 
       <div class="info-meta">
         <div class="info-meta-item">
           <span class="info-meta-label">Symbol</span>
           <span class="info-meta-value">${escapeHtml(d.symbol || "—")}</span>
+        </div>
+        <div class="info-meta-item">
+          <span class="info-meta-label">CEO</span>
+          <span class="info-meta-value">${escapeHtml(d.ceo || "—")}</span>
         </div>
         <div class="info-meta-item">
           <span class="info-meta-label">Asset Type</span>
@@ -111,6 +221,69 @@ function renderTickerInfo(d) {
         <p class="info-summary-text">${escapeHtml(d.business_summary)}</p>
       </div>` : ""}
     </div>`;
+  $("#ticker-info-refresh-btn")?.addEventListener("click", () => {
+    runTickerInfo(true);
+  });
+}
+
+function renderCryptoAddresses(payload) {
+  const body = $("#ticker-addresses-body");
+  const rows = payload?.rows || [];
+  if (!rows.length) {
+    body.innerHTML = `<div class="ticker-info-empty">No contract addresses found.</div>`;
+    return;
+  }
+
+  body.innerHTML = `
+    <div class="info-card">
+      <div class="info-header">
+        <div class="info-header-left">
+          <div class="info-company-name">${escapeHtml(payload.name || payload.symbol || "Addresses")}</div>
+          <div class="info-taxonomy">
+            ${payload.symbol ? `<span>${escapeHtml(payload.symbol)}</span>` : ""}
+            <span>${rows.length} ${rows.length === 1 ? "address" : "addresses"}</span>
+          </div>
+        </div>
+      </div>
+      <div class="options-table-wrap">
+        <table class="options-table">
+          <thead>
+            <tr>
+              <th>Chain</th>
+              <th>Address</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row) => `
+              <tr>
+                <td>${escapeHtml(row.chain || "—")}</td>
+                <td class="crypto-address-cell">${escapeHtml(row.address || "—")}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function formatCryptoSupply(value) {
+  if (value == null || value === "") return "—";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "—";
+  return number.toLocaleString("en-US", { maximumFractionDigits: 2 });
+}
+
+function formatCryptoUpdatedAt(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function renderInsiderTrades(rows, body) {
