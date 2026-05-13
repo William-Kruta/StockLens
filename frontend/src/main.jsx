@@ -13,10 +13,9 @@ import PaperTrade from './pages/PaperTrade/PaperTrade'
 import Screener from './pages/Screener/Screener'
 import Ticker from './pages/Ticker/Ticker'
 import Watchlist from './pages/Watchlist/Watchlist'
+import Dashboard from './pages/Dashboard/Dashboard'
 import './theme/tokens.css'
 import './theme/global.css'
-
-const Dashboard = () => <div style={{ padding: '2rem', color: 'var(--text-secondary)' }}>Dashboard — coming soon.</div>
 
 const queryClient = new QueryClient({
   defaultOptions: {
