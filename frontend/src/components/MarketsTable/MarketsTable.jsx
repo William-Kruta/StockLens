@@ -58,7 +58,7 @@ export default function MarketsTable({ sub }) {
           <tbody>
             {Array.from({ length: 5 }).map((_, i) => (
               <tr key={i} className={styles.skeletonRow}>
-                <td className={styles.skeletonCell} colSpan={6}>
+                <td colSpan={6}>
                   <div className={styles.skeleton} />
                 </td>
               </tr>
