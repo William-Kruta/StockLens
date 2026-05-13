@@ -29,7 +29,6 @@ export default function IndexStrip() {
         <span className={styles.meta}>{isLoading ? 'Loading…' : isError ? 'Unavailable' : cacheNote}</span>
       </div>
       <div className={styles.strip}>
-        {isLoading && <span className={styles.loading}>Loading…</span>}
         {isError && <span className={styles.error}>{error.message}</span>}
         {data?.indexes?.map((item) => (
           <div key={item.symbol} className={styles.tile}>
