@@ -7,6 +7,7 @@
   /* Borders */
   --color-border:       rgba(99, 102, 241, 0.15);
   --color-border-hover: rgba(99, 102, 241, 0.30);
+  --color-border-subtle: rgba(99, 102, 241, 0.06);
 
   /* Accent */
   --accent-indigo:      #6366f1;
