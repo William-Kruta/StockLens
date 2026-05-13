@@ -1,2 +1,4 @@
 import { createRoot } from 'react-dom/client'
-createRoot(document.getElementById('root')).render(<h1>StockLens</h1>)
+import './theme/tokens.css'
+import './theme/global.css'
+createRoot(document.getElementById('root')).render(<h1 style={{ color: 'var(--text-primary)', padding: '2rem' }}>StockLens</h1>)

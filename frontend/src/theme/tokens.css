@@ -1,0 +1,34 @@
+:root {
+  /* Backgrounds */
+  --color-bg:           #0d0d14;
+  --color-surface:      #1a1a2e;
+  --color-surface-2:    #16213e;
+
+  /* Borders */
+  --color-border:       rgba(99, 102, 241, 0.15);
+  --color-border-hover: rgba(99, 102, 241, 0.30);
+
+  /* Accent */
+  --accent-indigo:      #6366f1;
+  --accent-indigo-dim:  rgba(99, 102, 241, 0.08);
+  --accent-violet:      #818cf8;
+
+  /* Text */
+  --text-primary:       #e2e8f0;
+  --text-secondary:     #94a3b8;
+  --text-muted:         #475569;
+
+  /* Semantic */
+  --color-gain:         #4ade80;
+  --color-loss:         #f87171;
+  --color-volume:       #fbbf24;
+
+  /* Typography */
+  --font-sans:          system-ui, -apple-system, sans-serif;
+  --font-mono:          ui-monospace, monospace;
+
+  /* Radii */
+  --radius-sm:          6px;
+  --radius-md:          10px;
+  --radius-lg:          14px;
+}
