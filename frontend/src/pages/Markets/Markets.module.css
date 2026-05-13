@@ -33,8 +33,9 @@
 
 .sidebarItem.active {
   background: var(--accent-indigo-dim);
-  border-color: var(--accent-indigo);
-  color: var(--accent-indigo);
+  color: var(--accent-violet);
+  border-left: 3px solid var(--accent-indigo);
+  padding-left: calc(1rem - 3px);
 }
 
 .content {
@@ -50,7 +51,7 @@
   letter-spacing: -0.02em;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 800px) {
   .layout {
     flex-direction: column;
     gap: 1rem;
@@ -67,5 +68,12 @@
   .sidebarItem {
     white-space: nowrap;
     flex-shrink: 0;
+  }
+
+  .sidebarItem.active {
+    border-left: none;
+    border-bottom: 3px solid var(--accent-indigo);
+    padding-left: 1rem;
+    padding-bottom: calc(0.75rem - 3px);
   }
 }
