@@ -98,23 +98,28 @@ export default function MarketsTable({ sub }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={i}
-              className={styles.tr}
-              onClick={() => handleRowClick(row)}
-            >
-              {columns.map((col) => (
-                <td
-                  key={col}
-                  className={styles.td}
-                  style={cellStyle(col, row[col])}
-                >
-                  {formatCell(col, row[col])}
-                </td>
-              ))}
-            </tr>
-          ))}
+          {rows.map((row, i) => {
+            const rowSymbol = symbolColIdx !== -1
+              ? cleanSymbol(row[columns[symbolColIdx]])
+              : null
+            return (
+              <tr
+                key={rowSymbol || i}
+                className={styles.tr}
+                onClick={() => handleRowClick(row)}
+              >
+                {columns.map((col) => (
+                  <td
+                    key={col}
+                    className={styles.td}
+                    style={cellStyle(col, row[col])}
+                  >
+                    {formatCell(col, row[col])}
+                  </td>
+                ))}
+              </tr>
+            )
+          })}
         </tbody>
       </table>
       <div className={styles.footer}>
