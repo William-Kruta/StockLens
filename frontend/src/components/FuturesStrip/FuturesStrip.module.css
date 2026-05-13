@@ -1,0 +1,96 @@
+.section {
+  margin-bottom: 2.5rem;
+}
+
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 0.125rem;
+}
+
+.meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.strip {
+  display: flex;
+  gap: 0.625rem;
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+  scrollbar-width: none;
+}
+
+.strip::-webkit-scrollbar {
+  display: none;
+}
+
+.tile {
+  flex-shrink: 0;
+  background: var(--accent-indigo-dim);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  min-width: 120px;
+}
+
+.tileName {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.25rem;
+  white-space: nowrap;
+}
+
+.tileSymbol {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.125rem;
+  font-family: var(--font-mono);
+}
+
+.tilePrice {
+  font-size: 0.8125rem;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  margin-bottom: 0.25rem;
+}
+
+.tileChange {
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.gain { color: var(--color-gain); }
+.loss { color: var(--color-loss); }
+.neutral { color: var(--text-secondary); }
+
+.loading {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  padding: 0.5rem 0;
+}
+
+.error {
+  font-size: 0.8125rem;
+  color: var(--color-loss);
+  padding: 0.5rem 0;
+}
